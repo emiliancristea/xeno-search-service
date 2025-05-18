@@ -10,19 +10,19 @@ To create an advanced web search and processing engine, similar to Perplexity, t
 
 ### Phase 1: Initial Scraping Service (DuckDuckGo + Basic Content Extraction)
 
-*   **Status:** In Progress
+*   **Status:** Completed (Basic)
 *   **Goal:** Develop the foundational Python service that can fetch search results from DuckDuckGo for a given query, scrape basic content and titles from these results, and return them.
 *   **Detailed Log:** [process-phase-1.md](process-phase-1.md)
 
 ### Phase 2: Node.js Backend Integration
 
-*   **Status:** Pending
+*   **Status:** Completed
 *   **Goal:** Connect the existing Node.js backend to the Python Xeno Search Service, allowing the chat application to trigger searches and receive results.
-*   **Detailed Log:** `process-phase-2.md` (to be created)
+*   **Detailed Log:** [process-phase-2.md](process-phase-2.md)
 
 ### Phase 3: Frontend Integration (`ChatWithLLM.tsx`)
 
-*   **Status:** Pending
+*   **Status:** In Progress
 *   **Goal:** Integrate the search functionality into the frontend, allowing users to initiate searches and view results within the chat interface. The retrieved information will be used as context for LLM responses.
 *   **Detailed Log:** `process-phase-3.md` (to be created)
 
