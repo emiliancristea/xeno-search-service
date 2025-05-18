@@ -3,8 +3,11 @@ from bs4 import BeautifulSoup
 from typing import List, Dict, Optional, Any
 import asyncio
 import urllib.parse
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
+from readability import Document # For readability-lxml
 
 from app.models.search_models import Source #Pydantic model for structuring results
+from app.services.nlp_service import summarize_text_async # Import the summarizer
 
 # Standard headers to mimic a browser
 HEADERS = {
@@ -116,51 +119,66 @@ async def _get_duckduckgo_html_results(query: str, num_results: int = 10) -> Lis
 
 async def _scrape_page_content(url: str) -> Dict[str, Optional[str]]:
     """
-    Scrapes the title and attempts to extract main textual content from a given URL.
-    This is a very basic implementation.
+    Scrapes the title and extracts main textual content from a given URL
+    using httpx and readability-lxml (enhanced extraction without Playwright).
+    Also generates a summary if content is found.
     """
+    print(f"Attempting to scrape with httpx+readability: {url}")
+    page_summary: Optional[str] = None # Initialize summary
+
     try:
-        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=15.0) as client:
+        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30.0) as client:
             response = await client.get(url)
             response.raise_for_status()
-
-            soup = BeautifulSoup(response.text, 'lxml')
-
-            title = soup.title.string if soup.title else None
-
-            # Basic content extraction:
-            # Try to find common main content elements or just get all paragraphs.
-            # This will be replaced with more sophisticated methods (e.g. Playwright + Readability)
-            main_content_tags = ['article', 'main', '.main', '#main', '.post-content', '.entry-content']
-            content_element = None
-            for tag_selector in main_content_tags:
-                if soup.select_one(tag_selector):
-                    content_element = soup.select_one(tag_selector)
-                    break
             
+            html_content = response.text
+            final_url = str(response.url)  # Capture final URL after redirects
+            
+            # Use readability-lxml to extract main content
+            doc = Document(html_content)
+            title = doc.title()
+            main_content_html = doc.summary()
+
+            # Parse the cleaned HTML with BeautifulSoup to get structured text
+            soup = BeautifulSoup(main_content_html, 'lxml')
+            
+            # Extract title from original HTML as fallback if readability doesn't get a good one
+            if not title:
+                original_soup = BeautifulSoup(html_content, 'lxml')
+                title = original_soup.title.string if original_soup.title else None
+            
+            # Extract text, trying to maintain some structure (paragraphs)
             text_parts = []
-            if content_element:
-                paragraphs = content_element.find_all('p')
-                for p in paragraphs:
-                    text_parts.append(p.get_text(separator=' ', strip=True))
-            else: # Fallback: get all paragraphs from body
-                paragraphs = soup.find_all('p')
-                for p in paragraphs:
-                    text_parts.append(p.get_text(separator=' ', strip=True))
+            for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'article']):
+                text_parts.append(element.get_text(separator=' ', strip=True))
             
             raw_text = "\n\n".join(text_parts) if text_parts else None
 
-            return {'url': url, 'title': title, 'raw_text': raw_text}
+            # Generate summary if raw_text is available
+            if raw_text and raw_text.strip():
+                print(f"Attempting to summarize content for: {final_url}")
+                page_summary = await summarize_text_async(raw_text)
+                if page_summary:
+                    print(f"Successfully summarized content for: {final_url}")
+                else:
+                    print(f"Summarization returned None or failed for: {final_url}")
+            else:
+                print(f"No substantial raw text to summarize for: {final_url}")
+            
+            print(f"Successfully scraped with httpx+readability: {title} from {final_url}")
+            return {'url': final_url, 'title': title, 'raw_text': raw_text, 'summary': page_summary}
 
     except httpx.TimeoutException:
         print(f"Timeout while scraping URL: {url}")
-        return {'url': url, 'title': None, 'raw_text': None, 'error': 'Timeout'}
+        return {'url': url, 'title': None, 'raw_text': None, 'summary': None, 'error': 'Timeout'}
     except httpx.RequestError as e:
         print(f"Request error while scraping URL {url}: {e}")
-        return {'url': url, 'title': None, 'raw_text': None, 'error': f'Request error: {e}'}
+        return {'url': url, 'title': None, 'raw_text': None, 'summary': None, 'error': f'Request error: {e}'}
     except Exception as e:
+        # This will catch other errors including Readability issues
         print(f"An unexpected error occurred while scraping {url}: {e}")
-        return {'url': url, 'title': None, 'raw_text': None, 'error': f'Unexpected error: {e}'}
+        error_type = type(e).__name__
+        return {'url': url, 'title': None, 'raw_text': None, 'summary': None, 'error': f'{error_type}: {str(e)[:200]}'}
 
 
 async def perform_search(query: str, search_type: str, num_results: int) -> List[Source]:
@@ -199,7 +217,8 @@ async def perform_search(query: str, search_type: str, num_results: int) -> List
                 url=original_url,
                 title=original_title,
                 snippet=original_snippet or f"Failed to scrape content: {page_data_or_exc}",
-                raw_text=None
+                raw_text=None,
+                summary=None
             ))
         elif page_data_or_exc.get('error'):
             print(f"Error scraping {original_url}: {page_data_or_exc.get('error')}")
@@ -207,7 +226,8 @@ async def perform_search(query: str, search_type: str, num_results: int) -> List
                 url=original_url,
                 title=page_data_or_exc.get('title') or original_title,
                 snippet=original_snippet or f"Failed to scrape content: {page_data_or_exc.get('error')}",
-                raw_text=None
+                raw_text=None,
+                summary=None
             ))
         elif page_data_or_exc:
             raw_text_content = page_data_or_exc.get('raw_text')
@@ -217,7 +237,8 @@ async def perform_search(query: str, search_type: str, num_results: int) -> List
                 url=page_data_or_exc.get('url', original_url),
                 title=page_data_or_exc.get('title') or original_title,
                 raw_text=raw_text_content,
-                snippet=current_snippet
+                snippet=current_snippet,
+                summary=page_data_or_exc.get('summary')
             ))
         
         if len(scraped_sources) >= num_results:
@@ -240,7 +261,8 @@ if __name__ == '__main__':
                 print(f"  Title: {source.title}")
                 print(f"  URL: {source.url}")
                 print(f"  Snippet: {source.snippet}")
+                print(f"  Summary: {source.summary}")
         else:
             print("No results returned from the test search.")
 
-    asyncio.run(main_test()) 
+    asyncio.run(main_test())

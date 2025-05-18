@@ -5,12 +5,14 @@ httpx
 # For web scraping
 beautifulsoup4
 lxml
-playwright
-playwright-stealth
+# playwright # Commented out as we switched to SearXNG for initial results
+# playwright-stealth # Commented out
 python-dotenv
+readability-lxml # For better content extraction
 
-# For NLP (to be added in a later phase)
-# spacy
-# transformers
-# torch
-# nltk 
+# For NLP
+transformers
+torch
+sentencepiece
+# spacy # For later, more advanced NLP tasks
+# nltk # For later, more advanced NLP tasks

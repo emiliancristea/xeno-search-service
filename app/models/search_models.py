@@ -11,10 +11,11 @@ class Source(BaseModel):
     title: Optional[str] = None
     snippet: Optional[str] = None
     raw_text: Optional[str] = None # Full text if needed for deep analysis
+    summary: Optional[str] = None # NLP-generated summary of the content
 
 class SearchResponse(BaseModel):
     query: str
     search_type: str
     summary: Optional[str] = None
     sources: List[Source] = []
-    error: Optional[str] = None 
+    error: Optional[str] = None
