@@ -2,8 +2,7 @@ from fastapi import FastAPI, HTTPException
 from typing import List
 
 from app.models.search_models import SearchRequest, SearchResponse, Source
-# We will create scraping_service.py later
-# from app.services.scraping_service import perform_search 
+from app.services.scraping_service import perform_search 
 
 app = FastAPI(
     title="Xeno Search Service",
@@ -14,40 +13,35 @@ app = FastAPI(
 @app.post("/api/xeno-search-internal", response_model=SearchResponse)
 async def process_search(request: SearchRequest):
     print(f"Received search request: Query='{request.query}', Type='{request.search_type}', NumResults='{request.num_results}'")
-    # Placeholder for actual search logic
-    # results = await perform_search(request.query, request.search_type, request.num_results)
+    
+    if not request.query:
+        raise HTTPException(status_code=400, detail="Search query cannot be empty.")
 
-    # --- Placeholder Response --- 
-    if request.query.lower() == "test error":
-        # Simulate an error response
-        # In a real scenario, this would come from exceptions in deeper service calls
+    try:
+        results = await perform_search(request.query, request.search_type, request.num_results)
+        
+        # For now, we don't have a separate summary generation step.
+        # We can construct a basic summary or leave it for a later NLP stage.
+        # Placeholder summary for now if results are found:
+        summary_text = None
+        if results:
+            summary_text = f"Found {len(results)} sources for query: '{request.query}'. Content extracted."
+        else:
+            summary_text = f"No content found for query: '{request.query}'."
+
         return SearchResponse(
             query=request.query,
             search_type=request.search_type,
-            error="Simulated error during search processing."
+            summary=summary_text,
+            sources=results
         )
-
-    # Simulate a successful response with dummy data
-    dummy_sources = [
-        Source(
-            url="https://example.com/result1", 
-            title="Example Result 1", 
-            snippet="This is a snippet for the first example result from our Xeno Search."
-        ),
-        Source(
-            url="https://example.com/result2", 
-            title="Example Result 2", 
-            snippet="Another snippet, this time for the second exciting result."
-        )
-    ]
-    dummy_summary = f"This is a placeholder summary for the query: '{request.query}'. More advanced summarization will be implemented later."
-    
-    return SearchResponse(
-        query=request.query,
-        search_type=request.search_type,
-        summary=dummy_summary,
-        sources=dummy_sources
-    )
+    except Exception as e:
+        # Log the exception for debugging
+        print(f"Error during search processing in main.py: {e}")
+        # Optionally, re-raise or return a more generic error response
+        # For now, let's return a 500 error with the exception detail for easier debugging during development.
+        # In production, you might want to obscure such details.
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
 
 @app.get("/health")
 async def health_check():

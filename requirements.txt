@@ -6,6 +6,7 @@ httpx
 beautifulsoup4
 lxml
 playwright
+playwright-stealth
 python-dotenv
 
 # For NLP (to be added in a later phase)
