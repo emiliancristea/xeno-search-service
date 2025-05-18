@@ -47,6 +47,10 @@ async def process_search(request: SearchRequest):
 async def health_check():
     return {"status": "healthy"}
 
+@app.get("/")
+async def read_root():
+    return {"message": "Welcome to Xeno Search Service"}
+
 # To run this (after creating the directory structure and installing dependencies):
 # Ensure you are in the 'xeno-search-service' directory.
 # 1. Create and activate virtual environment (e.g., python -m venv venv; source venv/bin/activate or venv\Scripts\activate on Windows)
