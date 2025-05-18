@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+httpx
+
+# For web scraping
+beautifulsoup4
+lxml
+playwright
+python-dotenv
+
+# For NLP (to be added in a later phase)
+# spacy
+# transformers
+# torch
+# nltk 
