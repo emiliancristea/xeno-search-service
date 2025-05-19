@@ -62,10 +62,17 @@
 
 ### Step 1.7: Update Overall Summary in `SearchResponse` (Optional for now)
 
-*   **File to Tweak:** `app/main.py` (or `scraping_service.py` if summary logic moves there).
-*   **Action:** Consider how the individual source summaries contribute to the overall `summary` field in the `SearchResponse`. For now, the existing overall summary logic (e.g., "Found X sources...") can remain, or it could be enhanced to be a meta-summary.
-*   **Rationale:** Improves the top-level summary provided by the API.
-*   **Status:** Pending (Lower priority for initial summarization implementation).
+*   **File to Tweak:** `app/main.py` (or `scraping_service.py` if logic moves there).
+*   **Action:** 
+    *   Import `summarize_text_async` into `app/main.py`.
+    *   After receiving sources from `perform_search`:
+        *   Collect all non-empty `summary` fields from the `Source` objects.
+        *   If individual summaries exist, concatenate them.
+        *   Call `summarize_text_async` on this concatenated text to generate a meta-summary.
+        *   Use this meta-summary as the `summary` field in `SearchResponse`.
+        *   Include fallback logic if no individual summaries are available or if meta-summarization fails.
+*   **Rationale:** Improves the top-level summary provided by the API, making it more like a direct answer (Perplexity style).
+*   **Status:** Done.
 
 ### Step 1.8: Testing
 
@@ -74,7 +81,7 @@
     *   Check the quality of the summaries.
     *   Observe performance (summarization can be computationally intensive).
 *   **Rationale:** Ensures the new summarization feature works correctly and efficiently.
-*   **Status:** Pending.
+*   **Status:** Done - Summaries are now generated with `sshleifer/distilbart-cnn-12-6` model, successfully utilizing GPU (CUDA). Previous `IndexError` resolved. Quality and performance testing ongoing.
 
 ---
 (Further parts of Phase 4, like Deep Search, Keyword Extraction, etc., will be added later)

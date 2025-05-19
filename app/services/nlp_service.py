@@ -3,6 +3,7 @@ from transformers import pipeline, set_seed
 from typing import Optional
 import logging
 import torch # Ensure torch is imported
+import functools # Add this import
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -12,15 +13,16 @@ logging.basicConfig(level=logging.INFO)
 # This helps in not loading the model at import time unless it's actually used.
 # We'll use a placeholder and load it on first use.
 summarizer_pipeline = None
-summarizer_model_name = "facebook/bart-large-cnn" # Default model
+summarizer_model_name = "sshleifer/distilbart-cnn-12-6" # Changed model
 
 def get_summarizer():
     global summarizer_pipeline
     if summarizer_pipeline is None:
         try:
             logger.info(f"Initializing summarization pipeline with model: {summarizer_model_name}...")
-            # Check if CUDA is available and use it, otherwise use CPU
+            # Attempt to use CUDA if available
             device = 0 if torch.cuda.is_available() else -1
+            logger.info(f"Summarization pipeline will attempt to use device: {'cuda:0' if device == 0 else 'cpu'}")
             summarizer_pipeline = pipeline(
                 "summarization",
                 model=summarizer_model_name,
@@ -59,29 +61,35 @@ async def summarize_text_async(
         loop = asyncio.get_event_loop()
 
         # Pre-process text: Ensure it's not excessively long for the model
-        # Most summarization models have a token limit (e.g., 1024 for BART)
-        # This is a simplistic way to truncate; a better way would be to use model's tokenizer
-        # to count tokens and truncate, or split into chunks.
-        # For now, let's assume text is reasonably sized or pipeline handles truncation.
-        # However, very long texts can cause OOM or very slow processing.
-        # A simple character limit as a safeguard:
-        max_input_char_length = 10000 # Arbitrary limit, adjust based on model and resources
+        # BART model max tokens is 1024. 5000 chars is a safer upper bound for char truncation.
+        max_input_char_length = 5000 # Reduced from 10000
         if len(text) > max_input_char_length:
             logger.warning(f"Input text exceeds {max_input_char_length} chars. Truncating for summarization.")
             text_to_summarize = text[:max_input_char_length]
         else:
             text_to_summarize = text
 
+        # Ensure text_to_summarize is still valid after potential truncation
+        if not text_to_summarize or not text_to_summarize.strip():
+            logger.warning("Text became empty or whitespace after character truncation. Skipping summarization.")
+            return None
+
         logger.info(f"Starting summarization for text of length {len(text_to_summarize)} characters.")
         
-        # Run the blocking pipeline call in a separate thread
-        summary_list = await loop.run_in_executor(
-            None,  # Uses the default ThreadPoolExecutor
+        # Wrap the summarizer call with its arguments
+        summarizer_call = functools.partial(
             summarizer,
             text_to_summarize,
             max_length=max_length,
             min_length=min_length,
-            do_sample=do_sample
+            do_sample=do_sample,
+            truncation=True # Ensure tokenizer truncates to model's max input length
+        )
+        
+        # Run the blocking pipeline call in a separate thread
+        summary_list = await loop.run_in_executor(
+            None,  # Uses the default ThreadPoolExecutor
+            summarizer_call # Pass the wrapped call
         )
 
         if summary_list and isinstance(summary_list, list) and len(summary_list) > 0:
@@ -91,6 +99,10 @@ async def summarize_text_async(
         else:
             logger.warning("Summarization did not return expected output.")
             return None
+    except IndexError as e:
+        logger.error(f"IndexError during summarization: {e}. Problematic text snippet (first 200 chars): '{text_to_summarize[:200]}...'")
+        logger.exception("Traceback for IndexError in summarization:")
+        return "Error: Summarization failed due to an indexing issue with the input."
     except RuntimeError as e:
         if "generator raised StopIteration" in str(e):
             logger.warning(f"Summarization failed: Input text might be too short or unsuitable for the model. Error: {e}")
