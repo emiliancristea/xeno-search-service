@@ -122,4 +122,7 @@ dmypy.json
 *.swp
 *.swo
 *~
-.DS_Store 
+.DS_Store
+
+# Development process documentation (not tracked)
+process/ 
