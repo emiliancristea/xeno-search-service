@@ -26,20 +26,30 @@ To create an advanced web search and processing engine, similar to Perplexity, t
 *   **Goal:** Integrate the search functionality into the frontend, allowing users to initiate searches and view results within the chat interface. The retrieved information will be used as context for LLM responses.
 *   **Detailed Log:** `process-phase-3.md` (to be created)
 
-### Phase 4: Advanced Scraping & NLP Capabilities
+### Phase 4: Advanced Scraping & NLP Capabilities (In Progress)
 
-*   **Status:** Pending
-*   **Goal:** Enhance the Python service with:
-    *   Robust dynamic content scraping (Playwright).
-    *   Advanced main content extraction (e.g., using `python-readability`).
-    *   NLP processing (summarization, keyword/entity extraction using Transformers, spaCy).
-    *   Implementation of "Deep Search" logic.
-    *   Improved anti-scraping measures (proxies, user-agent rotation).
-    *   Caching mechanisms.
-*   **Detailed Log:** `process-phase-4.md` (to be created)
+*   **Date Started:** May 19, 2025
+*   **Key Objectives:** Implement text summarization, prepare for deep search, and keyword/entity extraction.
+*   **Status:**
+    *   **Text Summarization:**
+        *   Implemented `nlp_service.py` with `summarize_text_async`.
+        *   Integrated summarization into `scraping_service.py` for individual sources.
+        *   Added meta-summary generation in `main.py` for `SearchResponse`.
+        *   Successfully debugged and resolved `TypeError` in `run_in_executor` and `IndexError` with `facebook/bart-large-cnn`.
+        *   Switched to `sshleifer/distilbart-cnn-12-6` model.
+        *   **Achieved successful GPU (CUDA) utilization for summarization.**
+    *   **Citations:** Pending.
+    *   **Deep Search:** Pending.
+    *   **Keyword/Entity Extraction:** Pending.
+*   **Details:** See [Process Log: Phase 4](process-phase-4.md)
+
+**Next Steps:**
+1.  Implement citation generation for summaries.
+2.  Begin work on "Deep Search" capabilities.
+3.  Performance benchmarking and quality evaluation of summaries.
 
 ### Phase 5: Production Readiness & Refinements
 
 *   **Status:** Pending
 *   **Goal:** Focus on error handling, logging, configuration management, scalability, security, and code quality to make the service production-ready.
-*   **Detailed Log:** `process-phase-5.md` (to be created) 
+*   **Detailed Log:** `process-phase-5.md` (to be created)
