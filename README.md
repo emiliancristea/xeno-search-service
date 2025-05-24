@@ -599,7 +599,6 @@ For licensing inquiries, please contact: [licensing@xenolabs.com](mailto:licensi
 
 ## 📞 Support
 
-- **Documentation**: [Full Integration Guide](deep-search-implementation-guide.md)
 - **Enterprise Support**: [Contact XenoLabs](mailto:support@xenolabs.com)
 - **Technical Issues**: [Internal Support Portal](https://support.xenolabs.com)
 
