@@ -1,10 +1,52 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from typing import List
+import uuid
+import asyncio
+import json
 
 from app.models.search_models import SearchRequest, SearchResponse, Source
 from app.services.scraping_service import perform_search
 from app.services.nlp_service import summarize_text_async  # Import for meta-summary
 from app.services.deep_search_service import perform_deep_search_analysis  # Import deep search
+
+# WebSocket connection manager
+class WebSocketManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.search_connections: dict = {}
+    
+    async def connect(self, websocket: WebSocket, search_id: str):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        self.search_connections[search_id] = websocket
+        print(f"[WebSocket] Client connected for search {search_id}")
+    
+    def disconnect(self, websocket: WebSocket, search_id: str):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        if search_id in self.search_connections:
+            del self.search_connections[search_id]
+        print(f"[WebSocket] Client disconnected for search {search_id}")
+    
+    async def send_progress_update(self, search_id: str, phase: str, progress: int, message: str, data: dict = None):
+        if search_id in self.search_connections:
+            try:
+                update = {
+                    "search_id": search_id,
+                    "type": "progress_update",
+                    "data": {
+                        "phase": phase,
+                        "progress": progress,
+                        "message": message,
+                        "data": data or {}
+                    }
+                }
+                await self.search_connections[search_id].send_text(json.dumps(update))
+                print(f"[WebSocket] Sent update for {search_id}: {phase} - {progress}%")
+            except Exception as e:
+                print(f"[WebSocket] Error sending update for {search_id}: {e}")
+
+manager = WebSocketManager()
 
 app = FastAPI(
     title="Xeno Search Service",
@@ -80,6 +122,106 @@ async def process_search(request: SearchRequest):
         # Log the exception for debugging
         print(f"Error during search processing in main.py: {e}")
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+
+@app.post("/api/start-deep-search")
+async def start_deep_search(request: SearchRequest):
+    """Start a deep search with WebSocket progress tracking"""
+    search_id = f"search-{uuid.uuid4().hex[:12]}"
+    
+    # Start deep search in background
+    asyncio.create_task(perform_deep_search_with_websocket(search_id, request))
+    
+    return {"search_id": search_id}
+
+@app.websocket("/ws/deep-search/{search_id}")
+async def deep_search_websocket(websocket: WebSocket, search_id: str):
+    """WebSocket endpoint for real-time deep search progress updates"""
+    await manager.connect(websocket, search_id)
+    try:
+        while True:
+            # Keep connection alive and listen for any client messages
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, search_id)
+
+async def perform_deep_search_with_websocket(search_id: str, request: SearchRequest):
+    """Perform deep search with real-time WebSocket progress updates"""
+    try:
+        # Phase 1: Initializing (0-10%)
+        await manager.send_progress_update(
+            search_id, "initializing", 5, 
+            "🔄 Initializing deep search...",
+            {"query": request.query}
+        )
+        
+        # Phase 2: Initial Search (10-25%)
+        await manager.send_progress_update(
+            search_id, "initial_search", 15,
+            "🔍 Performing initial web search..."
+        )
+        
+        initial_sources = await perform_search(request.query, "normal", request.num_results)
+        
+        await manager.send_progress_update(
+            search_id, "initial_search", 25,
+            f"✅ Found {len(initial_sources)} initial sources",
+            {"sources_found": len(initial_sources)}
+        )
+        
+        # Phase 3: Analyzing Sources (25-40%)
+        await manager.send_progress_update(
+            search_id, "analyzing_sources", 30,
+            "📊 Analyzing source content for relevance..."
+        )
+        
+        # Phase 4: Deep Search Analysis (40-80%)
+        await manager.send_progress_update(
+            search_id, "following_links", 45,
+            "🌐 Following links and discovering additional content..."
+        )
+        
+        # Perform the actual deep search
+        all_sources, comprehensive_summary = await perform_deep_search_analysis(request.query, initial_sources)
+        
+        await manager.send_progress_update(
+            search_id, "scraping_content", 65,
+            f"📄 Successfully scraped {len(all_sources)} total sources"
+        )
+        
+        # Phase 5: AI Processing (80-95%)
+        await manager.send_progress_update(
+            search_id, "generating_summaries", 85,
+            "🤖 Generating AI summaries and analysis..."
+        )
+        
+        # Phase 6: Completed (100%)
+        final_results = {
+            "query": request.query,
+            "search_type": "deep",
+            "summary": comprehensive_summary,
+            "sources": [
+                {
+                    "url": str(source.url),
+                    "title": source.title,
+                    "snippet": source.snippet,
+                    "summary": source.summary
+                } for source in all_sources
+            ]
+        }
+        
+        await manager.send_progress_update(
+            search_id, "completed", 100,
+            f"✅ Deep search completed! Analyzed {len(all_sources)} sources.",
+            {"final_results": final_results}
+        )
+        
+    except Exception as e:
+        print(f"[WebSocket] Error in deep search {search_id}: {e}")
+        await manager.send_progress_update(
+            search_id, "error", 0,
+            f"❌ Search failed: {str(e)}",
+            {"error": str(e)}
+        )
 
 @app.get("/health")
 async def health_check():
