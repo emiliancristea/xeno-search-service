@@ -4,7 +4,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Proprietary-red.svg)](#)
 [![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](https://github.com/emiliancristea/xeno-search-service)
 
 ## 🌟 Overview
@@ -480,28 +480,25 @@ class StructuredLogger:
 - **AI model performance metrics**
 - **Resource utilization monitoring**
 
-## 🤝 Contributing
+## 👥 Development Team
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+This is a **proprietary project** developed by XenoLabs. Access to the source code and development is restricted to authorized team members only.
 
-### Development Setup
+### Internal Development Setup
 
 ```bash
-# Clone repository
+# For authorized developers only
 git clone https://github.com/emiliancristea/xeno-search-service.git
 cd xeno-search-service
 
 # Install development dependencies
 pip install -r requirements-dev.txt
 
-# Install pre-commit hooks
-pre-commit install
-
 # Run development server with auto-reload
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Code Quality
+### Code Quality Standards
 
 - **Black** for code formatting
 - **isort** for import sorting
@@ -587,7 +584,11 @@ uvicorn app.main:app --reload --port 8000
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is **proprietary software** owned by XenoLabs. All rights reserved.
+
+**Important**: This software is not open source. Unauthorized copying, distribution, modification, or use of this software is strictly prohibited and may result in legal action.
+
+For licensing inquiries, please contact: [licensing@xenolabs.com](mailto:licensing@xenolabs.com)
 
 ## 🙏 Acknowledgments
 
@@ -599,8 +600,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📞 Support
 
 - **Documentation**: [Full Integration Guide](deep-search-implementation-guide.md)
-- **Issues**: [GitHub Issues](https://github.com/emiliancristea/xeno-search-service/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/emiliancristea/xeno-search-service/discussions)
+- **Enterprise Support**: [Contact XenoLabs](mailto:support@xenolabs.com)
+- **Technical Issues**: [Internal Support Portal](https://support.xenolabs.com)
 
 ---
 
@@ -608,6 +609,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Built with ❤️ for the future of intelligent search**
 
-[⭐ Star this repo](https://github.com/emiliancristea/xeno-search-service) • [🐛 Report Bug](https://github.com/emiliancristea/xeno-search-service/issues) • [💡 Request Feature](https://github.com/emiliancristea/xeno-search-service/issues)
+**© 2025 XenoLabs. All rights reserved.**
 
 </div> 
