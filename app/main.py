@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import uuid
 import asyncio
@@ -52,6 +53,15 @@ app = FastAPI(
     title="Xeno Search Service",
     description="An advanced web search and processing service.",
     version="0.1.0"
+)
+
+# Add CORS middleware to allow cross-origin requests
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allow all headers
 )
 
 @app.post("/api/xeno-search-internal", response_model=SearchResponse)
