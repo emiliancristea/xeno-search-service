@@ -1,245 +1,702 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+import time
 import uuid
 import asyncio
-import json
+from datetime import datetime
+from typing import List, Dict, Any, Optional
+from contextlib import asynccontextmanager
 
-from app.models.search_models import SearchRequest, SearchResponse, Source
-from app.services.scraping_service import perform_search
-from app.services.nlp_service import summarize_text_async  # Import for meta-summary
-from app.services.deep_search_service import perform_deep_search_analysis  # Import deep search
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse, PlainTextResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+import structlog
 
-# WebSocket connection manager
-class WebSocketManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-        self.search_connections: dict = {}
+# Import our enhanced services
+from app.core.config import get_config
+from app.core.cache import initialize_cache, shutdown_cache, get_cache_manager
+from app.core.monitoring import get_monitor, EnhancedMonitor
+from app.models.search_models import (
+    SearchRequest, SearchResponse, Source, SearchStats, RelatedQuery,
+    SearchType, ContentCategory, SourceMetadata
+)
+from app.services.enhanced_search_aggregator import perform_enhanced_search
+from app.services.enhanced_nlp_service import get_enhanced_nlp_service
+from app.services.scraping_service import perform_search as legacy_search, _scrape_page_content
+from app.services.deep_search_service import perform_deep_search_analysis
+
+logger = structlog.get_logger(__name__)
+
+# Global configuration
+config = get_config()
+monitor = get_monitor()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan management"""
+    # Startup
+    logger.info("Starting Xeno Search Service", version=config.service_version)
     
-    async def connect(self, websocket: WebSocket, search_id: str):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        self.search_connections[search_id] = websocket
-        print(f"[WebSocket] Client connected for search {search_id}")
+    # Initialize core services
+    await initialize_cache()
     
-    def disconnect(self, websocket: WebSocket, search_id: str):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        if search_id in self.search_connections:
-            del self.search_connections[search_id]
-        print(f"[WebSocket] Client disconnected for search {search_id}")
+    # Pre-load critical models if configured
+    if config.semantic_search_enabled:
+        logger.info("Pre-loading NLP models...")
+        try:
+            nlp_service = await get_enhanced_nlp_service()
+            # Trigger model loading
+            await nlp_service.summarize_text_advanced("test", max_length=50)
+        except Exception as e:
+            logger.warning("Failed to pre-load NLP models", error=str(e))
     
-    async def send_progress_update(self, search_id: str, phase: str, progress: int, message: str, data: dict = None):
-        if search_id in self.search_connections:
-            try:
-                update = {
-                    "search_id": search_id,
-                    "type": "progress_update",
-                    "data": {
-                        "phase": phase,
-                        "progress": progress,
-                        "message": message,
-                        "data": data or {}
-                    }
-                }
-                await self.search_connections[search_id].send_text(json.dumps(update))
-                print(f"[WebSocket] Sent update for {search_id}: {phase} - {progress}%")
-            except Exception as e:
-                print(f"[WebSocket] Error sending update for {search_id}: {e}")
+    logger.info("Xeno Search Service started successfully")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down Xeno Search Service")
+    await shutdown_cache()
+    logger.info("Xeno Search Service stopped")
 
-manager = WebSocketManager()
 
+# Create FastAPI app with enhanced configuration
 app = FastAPI(
     title="Xeno Search Service",
-    description="An advanced web search and processing service.",
-    version="0.1.0"
+    description="Production-ready AI-powered search and analysis service that rivals Perplexity",
+    version=config.service_version,
+    docs_url="/docs" if config.debug else None,
+    redoc_url="/redoc" if config.debug else None,
+    lifespan=lifespan
 )
 
-# Add CORS middleware to allow cross-origin requests
+# Middleware configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for development
+    allow_origins=config.cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Allow all methods (GET, POST, OPTIONS, etc.)
-    allow_headers=["*"],  # Allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-@app.post("/api/xeno-search-internal", response_model=SearchResponse)
-async def process_search(request: SearchRequest):
-    print(f"Received search request: Query='{request.query}', Type='{request.search_type}', NumResults='{request.num_results}'")
-    
-    if not request.query:
-        raise HTTPException(status_code=400, detail="Search query cannot be empty.")
+if config.environment == "production":
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=["*"]  # Configure appropriately for production
+    )
 
-    try:
-        # Perform initial search
-        initial_sources: List[Source] = await perform_search(request.query, request.search_type, request.num_results)
+
+# Request/Response middleware for monitoring
+@app.middleware("http")
+async def monitoring_middleware(request: Request, call_next):
+    """Monitor all HTTP requests"""
+    start_time = time.time()
+    
+    # Process request
+    response = await call_next(request)
+    
+    # Record metrics
+    duration = time.time() - start_time
+    monitor.record_http_request(
+        method=request.method,
+        endpoint=request.url.path,
+        status_code=response.status_code,
+        duration=duration
+    )
+    
+    # Add response headers
+    response.headers["X-Processing-Time"] = f"{duration:.3f}s"
+    response.headers["X-Service-Version"] = config.service_version
+    
+    return response
+
+
+# WebSocket connection manager for real-time updates
+class EnhancedWebSocketManager:
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+        self.search_connections: Dict[str, str] = {}  # search_id -> connection_id
+    
+    async def connect(self, websocket: WebSocket, connection_id: str, search_id: str = None):
+        await websocket.accept()
+        self.active_connections[connection_id] = websocket
+        if search_id:
+            self.search_connections[search_id] = connection_id
+        monitor.set_active_connections(len(self.active_connections))
+        logger.info("WebSocket connected", connection_id=connection_id, search_id=search_id)
+    
+    def disconnect(self, connection_id: str, search_id: str = None):
+        if connection_id in self.active_connections:
+            del self.active_connections[connection_id]
+        if search_id and search_id in self.search_connections:
+            del self.search_connections[search_id]
+        monitor.set_active_connections(len(self.active_connections))
+        logger.info("WebSocket disconnected", connection_id=connection_id)
+    
+    async def send_progress_update(self, search_id: str, phase: str, progress: int, 
+                                 message: str, data: dict = None):
+        connection_id = self.search_connections.get(search_id)
+        if not connection_id or connection_id not in self.active_connections:
+            return
         
-        # Determine if we need to perform deep search
-        if request.search_type == "deep" and initial_sources:
-            print(f"🔍 Performing deep search for query: '{request.query}'")
-            # Perform deep search analysis
-            all_sources, comprehensive_summary = await perform_deep_search_analysis(request.query, initial_sources)
+        try:
+            update = {
+                "search_id": search_id,
+                "type": "progress_update",
+                "timestamp": datetime.utcnow().isoformat(),
+                "data": {
+                    "phase": phase,
+                    "progress": progress,
+                    "message": message,
+                    "data": data or {}
+                }
+            }
             
-            return SearchResponse(
-                query=request.query,
-                search_type=request.search_type,
-                summary=comprehensive_summary,
-                sources=all_sources
+            websocket = self.active_connections[connection_id]
+            await websocket.send_json(update)
+            
+        except Exception as e:
+            logger.warning("Failed to send WebSocket update", 
+                         search_id=search_id, error=str(e))
+
+
+websocket_manager = EnhancedWebSocketManager()
+
+
+# Enhanced search endpoint with full feature set
+@app.post("/api/v2/search", response_model=SearchResponse)
+async def enhanced_search_endpoint(request: SearchRequest):
+    """
+    Enhanced search endpoint with comprehensive features
+    """
+    start_time = time.time()
+    
+    async with monitor.track_operation("enhanced_search_request", 
+                                     query=request.query, 
+                                     search_type=request.search_type.value) as metrics:
+        
+        logger.info("Enhanced search request received", 
+                   query=request.query, 
+                   search_type=request.search_type,
+                   num_results=request.num_results)
+        
+        try:
+            # Validate request
+            if len(request.query.strip()) < 2:
+                raise HTTPException(status_code=400, detail="Query too short")
+            
+            # Check rate limiting (if enabled)
+            # TODO: Implement rate limiting logic
+            
+            # Initialize response
+            response_id = f"search-{uuid.uuid4().hex[:12]}"
+            sources = []
+            search_stats = SearchStats(
+                total_results=0,
+                processing_time_ms=0,
+                engines_used=[],
+                cache_hits=0,
+                cache_misses=0
             )
-        else:
-            # Standard search processing (existing logic)
-            overall_summary_text = None
-            if initial_sources:
-                # Collect individual summaries
-                individual_summaries = [s.summary for s in initial_sources if s.summary and s.summary.strip()]
+            
+            # Perform search based on type
+            if request.search_type == SearchType.ENHANCED:
+                sources = await perform_enhanced_search(request.query, request.num_results)
+                search_stats.engines_used = list(config.search_engines)
                 
-                if individual_summaries:
-                    combined_summaries_text = "\n\n".join(individual_summaries)
-                    # Summarize the combined summaries to create a meta-summary
-                    meta_min_length = max(30, len(individual_summaries) * 10)
-                    meta_max_length = max(150, len(individual_summaries) * 50)
-                    meta_max_length = min(meta_max_length, 400) 
-
-                    print(f"Generating overall summary from {len(individual_summaries)} individual summaries. Combined length: {len(combined_summaries_text)}")
-                    if len(combined_summaries_text) > 50:
-                        overall_summary_text = await summarize_text_async(
-                            combined_summaries_text,
-                            min_length=meta_min_length,
-                            max_length=meta_max_length
-                        )
-                        if overall_summary_text:
-                            print(f"Overall summary generated. Length: {len(overall_summary_text)}")
-                        else:
-                            print("Meta-summarization returned None or failed. Falling back.")
-                            overall_summary_text = f"Found {len(initial_sources)} sources. Review individual summaries for details."
-                    else:
-                        print("Combined individual summaries too short for meta-summarization. Using fallback.")
-                        overall_summary_text = f"Found {len(initial_sources)} sources. Review individual summaries for details. Content may be too brief for an overall summary."
-                else:
-                    overall_summary_text = f"Found {len(initial_sources)} sources, but no individual summaries were generated. Content might be unavailable or too short."
+            elif request.search_type == SearchType.DEEP:
+                # First get initial results
+                initial_sources = await perform_enhanced_search(request.query, request.num_results)
+                # Then perform deep search
+                if initial_sources:
+                    all_sources, comprehensive_summary = await perform_deep_search_analysis(
+                        request.query, initial_sources
+                    )
+                    sources = all_sources
+                search_stats.engines_used = list(config.search_engines)
+                
+            elif request.search_type == SearchType.SEMANTIC:
+                # Enhanced semantic search
+                sources = await perform_enhanced_search(request.query, request.num_results)
+                # Additional semantic ranking will be applied in the aggregator
+                search_stats.engines_used = list(config.search_engines)
+                
             else:
-                overall_summary_text = f"No content found for query: '{request.query}'."
-
-            return SearchResponse(
+                # Fallback to legacy search for NORMAL type
+                sources = await legacy_search(request.query, request.search_type.value, request.num_results)
+                search_stats.engines_used = ["duckduckgo"]
+            
+            # Enhanced content processing
+            if sources and request.include_summaries:
+                await _process_sources_with_enhanced_nlp(sources, request.query)
+            
+            # Apply content filtering
+            if request.min_quality_score:
+                sources = [s for s in sources if s.quality_score and s.quality_score >= request.min_quality_score]
+            
+            if request.include_categories or request.exclude_categories:
+                sources = _filter_sources_by_category(sources, request.include_categories, request.exclude_categories)
+            
+            # Generate comprehensive summary
+            summary = await _generate_enhanced_summary(request.query, sources, request.search_type)
+            
+            # Generate related queries
+            related_queries = await _generate_related_queries(request.query, sources[:5])
+            
+            # Calculate statistics
+            processing_time_ms = int((time.time() - start_time) * 1000)
+            search_stats.total_results = len(sources)
+            search_stats.processing_time_ms = processing_time_ms
+            
+            if sources:
+                confidence_scores = [s.confidence_score for s in sources if s.confidence_score]
+                if confidence_scores:
+                    search_stats.avg_confidence_score = sum(confidence_scores) / len(confidence_scores)
+                
+                quality_scores = [s.quality_score for s in sources if s.quality_score]
+                if quality_scores:
+                    search_stats.avg_quality_score = sum(quality_scores) / len(quality_scores)
+                
+                # Category distribution
+                for source in sources:
+                    if source.content_category:
+                        search_stats.category_distribution[source.content_category] = \
+                            search_stats.category_distribution.get(source.content_category, 0) + 1
+            
+            # Create enhanced response
+            response = SearchResponse(
                 query=request.query,
                 search_type=request.search_type,
-                summary=overall_summary_text,
-                sources=initial_sources
+                sources=sources,
+                summary=summary,
+                related_queries=related_queries,
+                stats=search_stats,
+                response_id=response_id,
+                processing_time_ms=processing_time_ms
             )
             
+            # Calculate additional metrics
+            response.overall_confidence = response.calculate_overall_confidence()
+            response.result_diversity_score = response.calculate_result_diversity()
+            
+            # Record metrics
+            monitor.record_search_request(
+                request.search_type.value,
+                processing_time_ms / 1000.0,
+                len(sources)
+            )
+            
+            # Update metrics metadata
+            metrics.metadata.update({
+                "results_count": len(sources),
+                "overall_confidence": response.overall_confidence,
+                "diversity_score": response.result_diversity_score
+            })
+            
+            logger.info("Enhanced search completed successfully",
+                       query=request.query,
+                       results_count=len(sources),
+                       processing_time_ms=processing_time_ms,
+                       overall_confidence=response.overall_confidence)
+            
+            return response
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Enhanced search failed", query=request.query, error=str(e))
+            monitor.record_error("enhanced_search", str(e))
+            raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+async def _process_sources_with_enhanced_nlp(sources: List[Source], query: str):
+    """Process sources with enhanced NLP capabilities"""
+    nlp_service = await get_enhanced_nlp_service()
+    
+    # Process sources in batches for efficiency
+    batch_size = 5
+    for i in range(0, len(sources), batch_size):
+        batch = sources[i:i + batch_size]
+        tasks = []
+        
+        for source in batch:
+            if source.raw_text:
+                task = nlp_service.analyze_text_comprehensively(
+                    source.raw_text,
+                    source.title or "",
+                    include_summary=True,
+                    include_classification=True,
+                    include_entities=False,  # Skip entities for performance
+                    include_keywords=True
+                )
+                tasks.append((source, task))
+        
+        # Execute batch
+        for source, task in tasks:
+            try:
+                analysis = await task
+                
+                # Update source with analysis results
+                if analysis.get('summary'):
+                    summary_result = analysis['summary']
+                    if hasattr(summary_result, 'summary'):
+                        source.summary = summary_result.summary
+                        if not source.metadata:
+                            source.metadata = SourceMetadata()
+                        source.metadata.content_quality_score = summary_result.confidence_score
+                
+                if analysis.get('classification'):
+                    classification = analysis['classification']
+                    if classification:
+                        source.content_category = classification.category
+                        if not source.confidence_score:
+                            source.confidence_score = classification.confidence
+                
+                if analysis.get('keywords'):
+                    source.content_tags = analysis['keywords'][:5]  # Top 5 keywords
+                
+                # Calculate quality score
+                source.quality_score = source.calculate_quality_score()
+                
+            except Exception as e:
+                logger.warning("Failed to process source with NLP", 
+                             url=source.url, error=str(e))
+
+
+def _filter_sources_by_category(sources: List[Source], 
+                               include_categories: List[ContentCategory],
+                               exclude_categories: List[ContentCategory]) -> List[Source]:
+    """Filter sources by content category"""
+    filtered = []
+    
+    for source in sources:
+        # Skip if category should be excluded
+        if exclude_categories and source.content_category in exclude_categories:
+            continue
+        
+        # Include if no specific categories requested or category matches
+        if not include_categories or source.content_category in include_categories:
+            filtered.append(source)
+    
+    return filtered
+
+
+async def _generate_enhanced_summary(query: str, sources: List[Source], 
+                                   search_type: SearchType) -> Optional[str]:
+    """Generate enhanced summary using advanced NLP"""
+    if not sources:
+        return f"No results found for query: '{query}'"
+    
+    try:
+        nlp_service = await get_enhanced_nlp_service()
+        
+        # Collect summaries and key content
+        summaries = []
+        for source in sources[:10]:  # Limit to top 10 for summary
+            if source.summary:
+                summaries.append(f"From {source.get_domain()}: {source.summary}")
+            elif source.snippet:
+                summaries.append(f"From {source.get_domain()}: {source.snippet}")
+        
+        if not summaries:
+            return f"Found {len(sources)} sources for '{query}' but unable to generate summary."
+        
+        # Combine summaries
+        combined_text = "\n\n".join(summaries)
+        
+        # Generate meta-summary
+        summary_result = await nlp_service.summarize_text_advanced(
+            combined_text,
+            max_length=300,
+            min_length=100,
+            strategy="balanced"
+        )
+        
+        if summary_result and summary_result.summary:
+            return f"Search Summary for '{query}':\n\n{summary_result.summary}"
+        
+        # Fallback summary
+        return f"Found {len(sources)} relevant sources for '{query}'. Key insights from multiple sources have been aggregated."
+        
     except Exception as e:
-        # Log the exception for debugging
-        print(f"Error during search processing in main.py: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {str(e)}")
+        logger.warning("Enhanced summary generation failed", error=str(e))
+        return f"Found {len(sources)} sources for '{query}'. Summary generation temporarily unavailable."
 
-@app.post("/api/start-deep-search")
-async def start_deep_search(request: SearchRequest):
-    """Start a deep search with WebSocket progress tracking"""
-    search_id = f"search-{uuid.uuid4().hex[:12]}"
-    
-    # Start deep search in background
-    asyncio.create_task(perform_deep_search_with_websocket(search_id, request))
-    
-    return {"search_id": search_id}
 
-@app.websocket("/ws/deep-search/{search_id}")
-async def deep_search_websocket(websocket: WebSocket, search_id: str):
-    """WebSocket endpoint for real-time deep search progress updates"""
-    await manager.connect(websocket, search_id)
+async def _generate_related_queries(query: str, sources: List[Source]) -> List[RelatedQuery]:
+    """Generate related query suggestions"""
+    try:
+        # Extract keywords from top sources
+        all_keywords = set()
+        for source in sources:
+            if source.content_tags:
+                all_keywords.update(source.content_tags)
+        
+        # Generate simple related queries (in production, use more sophisticated methods)
+        related = []
+        keywords = list(all_keywords)[:10]
+        
+        for keyword in keywords:
+            if keyword.lower() not in query.lower():
+                related_query = f"{query} {keyword}"
+                related.append(RelatedQuery(
+                    query=related_query,
+                    confidence=0.7,
+                    category="keyword_expansion"
+                ))
+        
+        return related[:5]  # Top 5 related queries
+        
+    except Exception as e:
+        logger.warning("Related query generation failed", error=str(e))
+        return []
+
+
+# Legacy endpoint for backward compatibility
+@app.post("/api/xeno-search-internal", response_model=SearchResponse)
+async def legacy_search_endpoint(request: SearchRequest):
+    """Legacy search endpoint for backward compatibility"""
+    # Convert to new format and delegate
+    return await enhanced_search_endpoint(request)
+
+
+# WebSocket endpoint for real-time search updates
+@app.websocket("/ws/search/{search_id}")
+async def search_websocket(websocket: WebSocket, search_id: str):
+    """WebSocket endpoint for real-time search progress"""
+    connection_id = f"ws-{uuid.uuid4().hex[:8]}"
+    
+    await websocket_manager.connect(websocket, connection_id, search_id)
+    
     try:
         while True:
-            # Keep connection alive and listen for any client messages
-            await websocket.receive_text()
+            # Keep connection alive
+            data = await websocket.receive_text()
+            # Echo back to keep connection active
+            await websocket.send_json({"type": "ping", "data": "pong"})
+            
     except WebSocketDisconnect:
-        manager.disconnect(websocket, search_id)
+        websocket_manager.disconnect(connection_id, search_id)
 
-async def perform_deep_search_with_websocket(search_id: str, request: SearchRequest):
-    """Perform deep search with real-time WebSocket progress updates"""
+
+# Advanced search endpoint with real-time updates
+@app.post("/api/v2/search/streaming")
+async def streaming_search_endpoint(request: SearchRequest):
+    """Start a streaming search with WebSocket updates"""
+    search_id = f"search-{uuid.uuid4().hex[:12]}"
+    
+    # Start search in background
+    asyncio.create_task(perform_streaming_search(search_id, request))
+    
+    return {"search_id": search_id, "websocket_url": f"/ws/search/{search_id}"}
+
+
+async def perform_streaming_search(search_id: str, request: SearchRequest):
+    """Perform search with real-time WebSocket updates"""
     try:
-        # Phase 1: Initializing (0-10%)
-        await manager.send_progress_update(
-            search_id, "initializing", 5, 
-            "🔄 Initializing deep search...",
-            {"query": request.query}
+        await websocket_manager.send_progress_update(
+            search_id, "initializing", 5, "🔄 Initializing enhanced search..."
         )
         
-        # Phase 2: Initial Search (10-25%)
-        await manager.send_progress_update(
-            search_id, "initial_search", 15,
-            "🔍 Performing initial web search..."
+        await websocket_manager.send_progress_update(
+            search_id, "searching", 20, "🔍 Searching multiple engines..."
         )
         
-        initial_sources = await perform_search(request.query, "normal", request.num_results)
+        # Perform the actual search
+        sources = await perform_enhanced_search(request.query, request.num_results)
         
-        await manager.send_progress_update(
-            search_id, "initial_search", 25,
-            f"✅ Found {len(initial_sources)} initial sources",
-            {"sources_found": len(initial_sources)}
+        await websocket_manager.send_progress_update(
+            search_id, "processing", 60, f"📊 Processing {len(sources)} sources..."
         )
         
-        # Phase 3: Analyzing Sources (25-40%)
-        await manager.send_progress_update(
-            search_id, "analyzing_sources", 30,
-            "📊 Analyzing source content for relevance..."
+        # Enhanced processing
+        if sources:
+            await _process_sources_with_enhanced_nlp(sources, request.query)
+        
+        await websocket_manager.send_progress_update(
+            search_id, "finalizing", 90, "🤖 Generating AI analysis..."
         )
         
-        # Phase 4: Deep Search Analysis (40-80%)
-        await manager.send_progress_update(
-            search_id, "following_links", 45,
-            "🌐 Following links and discovering additional content..."
+        # Generate summary and related queries
+        summary = await _generate_enhanced_summary(request.query, sources, request.search_type)
+        related_queries = await _generate_related_queries(request.query, sources[:5])
+        
+        # Send final results
+        response = SearchResponse(
+            query=request.query,
+            search_type=request.search_type,
+            sources=sources,
+            summary=summary,
+            related_queries=related_queries,
+            response_id=search_id
         )
         
-        # Perform the actual deep search
-        all_sources, comprehensive_summary = await perform_deep_search_analysis(request.query, initial_sources)
-        
-        await manager.send_progress_update(
-            search_id, "scraping_content", 65,
-            f"📄 Successfully scraped {len(all_sources)} total sources"
-        )
-        
-        # Phase 5: AI Processing (80-95%)
-        await manager.send_progress_update(
-            search_id, "generating_summaries", 85,
-            "🤖 Generating AI summaries and analysis..."
-        )
-        
-        # Phase 6: Completed (100%)
-        final_results = {
-            "query": request.query,
-            "search_type": "deep",
-            "summary": comprehensive_summary,
-            "sources": [
-                {
-                    "url": str(source.url),
-                    "title": source.title,
-                    "snippet": source.snippet,
-                    "summary": source.summary
-                } for source in all_sources
-            ]
-        }
-        
-        await manager.send_progress_update(
-            search_id, "completed", 100,
-            f"✅ Deep search completed! Analyzed {len(all_sources)} sources.",
-            {"final_results": final_results}
+        await websocket_manager.send_progress_update(
+            search_id, "completed", 100, f"✅ Search completed! Found {len(sources)} sources.",
+            {"results": response.dict()}
         )
         
     except Exception as e:
-        print(f"[WebSocket] Error in deep search {search_id}: {e}")
-        await manager.send_progress_update(
-            search_id, "error", 0,
-            f"❌ Search failed: {str(e)}",
-            {"error": str(e)}
+        logger.error("Streaming search failed", search_id=search_id, error=str(e))
+        await websocket_manager.send_progress_update(
+            search_id, "error", 0, f"❌ Search failed: {str(e)}"
         )
 
+
+# Content analysis endpoint
+@app.post("/api/v2/analyze")
+async def analyze_content_endpoint(
+    url: Optional[str] = None,
+    text: Optional[str] = None,
+    include_summary: bool = True,
+    include_classification: bool = True,
+    include_entities: bool = True,
+    include_keywords: bool = True
+):
+    """Analyze content from URL or text"""
+    if not url and not text:
+        raise HTTPException(status_code=400, detail="Either URL or text must be provided")
+    
+    try:
+        content_text = text
+        title = ""
+        
+        if url and not text:
+            # Scrape content from URL
+            scraped_data = await _scrape_page_content(url)
+            content_text = scraped_data.get('raw_text')
+            title = scraped_data.get('title', '')
+            
+            if not content_text:
+                raise HTTPException(status_code=400, detail="Failed to extract content from URL")
+        
+        # Perform comprehensive analysis
+        nlp_service = await get_enhanced_nlp_service()
+        analysis = await nlp_service.analyze_text_comprehensively(
+            content_text,
+            title,
+            include_summary=include_summary,
+            include_classification=include_classification,
+            include_entities=include_entities,
+            include_keywords=include_keywords
+        )
+        
+        return {
+            "url": url,
+            "analysis": analysis,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Content analysis failed", url=url, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+
+
+# Health check endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Comprehensive health check"""
+    health_status = await monitor.get_health_status()
+    
+    status_code = 200 if health_status["status"] == "healthy" else 503
+    
+    return JSONResponse(
+        content=health_status,
+        status_code=status_code
+    )
 
+
+# Metrics endpoint for Prometheus
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Prometheus metrics endpoint"""
+    metrics_data = monitor.get_prometheus_metrics()
+    return Response(content=metrics_data, media_type=CONTENT_TYPE_LATEST)
+
+
+# Performance analytics endpoint
+@app.get("/api/v2/analytics/performance")
+async def performance_analytics(
+    operation: Optional[str] = None,
+    hours: int = 24
+):
+    """Get performance analytics"""
+    summary = monitor.get_performance_summary(operation, hours)
+    
+    # Add cache statistics
+    cache_manager = await get_cache_manager()
+    cache_stats = cache_manager.get_cache_stats()
+    
+    return {
+        "performance_summary": summary,
+        "cache_statistics": cache_stats,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+# Cache management endpoints
+@app.post("/api/v2/admin/cache/clear")
+async def clear_cache_endpoint(pattern: str = "*"):
+    """Clear cache entries"""
+    cache_manager = await get_cache_manager()
+    success = await cache_manager.clear_cache(pattern)
+    
+    return {
+        "success": success,
+        "pattern": pattern,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+# Configuration endpoint
+@app.get("/api/v2/config")
+async def get_configuration():
+    """Get current service configuration (non-sensitive fields only)"""
+    return {
+        "service_name": config.service_name,
+        "service_version": config.service_version,
+        "environment": config.environment,
+        "search_engines": config.search_engines,
+        "features": {
+            "deep_search": config.deep_search_enabled,
+            "semantic_search": config.semantic_search_enabled,
+            "caching": config.cache_enabled,
+            "monitoring": config.metrics_enabled,
+            "websockets": config.enable_websocket_updates
+        },
+        "limits": {
+            "max_results_per_request": config.max_results_per_request,
+            "default_num_results": config.default_num_results
+        }
+    }
+
+
+# Root endpoint
 @app.get("/")
-async def read_root():
-    return {"message": "Welcome to Xeno Search Service"}
+async def root():
+    """Service information"""
+    return {
+        "service": "Xeno Search Service",
+        "version": config.service_version,
+        "description": "Production-ready AI-powered search and analysis service",
+        "status": "operational",
+        "features": [
+            "Multi-engine search aggregation",
+            "Advanced AI summarization", 
+            "Semantic search and ranking",
+            "Deep link analysis",
+            "Real-time progress updates",
+            "Comprehensive content analysis",
+            "Redis caching with deduplication",
+            "Prometheus metrics and monitoring"
+        ],
+        "docs_url": "/docs" if config.debug else None,
+        "health_url": "/health",
+        "metrics_url": "/metrics"
+    }
 
 # To run this (after creating the directory structure and installing dependencies):
 # Ensure you are in the 'xeno-search-service' directory.

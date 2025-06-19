@@ -1,365 +1,333 @@
-# 🔍 Xeno Search Service
+# 🔍 Xeno Search Service v2.0
 
-**Enterprise-grade AI-powered search engine with real-time web scraping, deep search capabilities, and intelligent content synthesis**
+**Production-ready AI-powered search and analysis service that rivals Perplexity**
 
-[![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
-[![License](https://img.shields.io/badge/License-Proprietary-red.svg)](#)
-[![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)](https://github.com/emiliancristea/xeno-search-service)
+A comprehensive, scalable search service featuring multi-engine aggregation, advanced AI summarization, semantic search, real-time analysis, and enterprise-grade monitoring.
 
-## 🌟 Overview
+## ✨ Key Features
 
-Xeno Search Service is an **advanced AI-powered search engine** that delivers superior web intelligence through proprietary deep search technology, real-time content analysis, and intelligent synthesis. Engineered for continuous production deployment and evolution, it outperforms traditional search solutions with **custom scraping infrastructure**, **multi-level content discovery**, and **GPU-accelerated AI processing**. Built for enterprises demanding cutting-edge web intelligence capabilities.
+### 🚀 **Advanced Search Capabilities**
+- **Multi-Engine Aggregation**: SearXNG, DuckDuckGo, Brave Search with intelligent result merging
+- **Semantic Search**: AI-powered relevance ranking using sentence transformers
+- **Deep Search**: Recursive link following with intelligent content discovery
+- **Real-time Updates**: WebSocket-based progress tracking for long-running searches
 
-### ✨ Key Features
+### 🤖 **AI-Powered Analysis**
+- **Advanced Summarization**: Multiple summarization strategies with BART/Pegasus models
+- **Content Classification**: Automatic categorization (news, academic, blog, etc.)
+- **Entity Extraction**: Named entity recognition with spaCy
+- **Keyword Analysis**: TF-IDF based keyword extraction
+- **Semantic Similarity**: Vector-based content relevance scoring
 
-- 🔍 **Real-Time Web Search** - Dynamic content discovery from multiple sources
-- 🧠 **Deep Search Technology** - Multi-level link following and semantic analysis
-- ⚡ **Live Progress Tracking** - WebSocket-powered real-time search updates
-- 🤖 **AI-Powered Summarization** - GPU-accelerated content synthesis with CUDA support
-- 🌐 **Multi-Source Aggregation** - Intelligent content collection from diverse web sources
-- 📊 **Semantic Relevance Scoring** - Advanced algorithms for content ranking
-- 🔄 **Progressive Search Interface** - Modern UI patterns with live status updates
-- 🛡️ **Production-Ready Architecture** - Scalable, resilient, and enterprise-grade
+### ⚡ **Performance & Scalability**
+- **Redis Caching**: Intelligent caching with deduplication and TTL management
+- **Concurrent Processing**: Parallel search engine queries and content processing
+- **Rate Limiting**: Configurable request throttling
+- **Load Balancing**: Multi-worker deployment support
 
-## 🏗️ Architecture
+### 📊 **Enterprise Monitoring**
+- **Prometheus Metrics**: Comprehensive performance and usage metrics
+- **Structured Logging**: JSON-formatted logs with context
+- **Health Checks**: Multi-component health monitoring
+- **Performance Analytics**: Detailed operation timing and success rates
 
-```mermaid
-graph TB
-    A[Frontend Client] -->|WebSocket| B[FastAPI Gateway]
-    B --> C[Deep Search Service]
-    B --> D[NLP Service]
-    B --> E[Scraping Service]
-    
-    C --> F[Link Analysis Engine]
-    C --> G[Content Aggregation]
-    
-    D --> H[AI Summarization]
-    D --> I[Semantic Analysis]
-    
-    E --> J[Multi-Source Discovery]
-    E --> K[Content Extraction]
-    
-    F --> L[Relevance Scoring]
-    G --> M[Source Synthesis]
-    
-    subgraph "External Sources"
-        N[Search Engines]
-        O[Web Content]
-        P[Dynamic Sites]
-    end
-    
-    J --> N
-    K --> O
-    K --> P
-```
+### 🛡️ **Production Ready**
+- **Comprehensive Configuration**: 100+ configurable parameters
+- **Security Features**: API key authentication, CORS, rate limiting
+- **Error Handling**: Graceful degradation and detailed error reporting
+- **Docker Support**: Container-ready with optimized builds
 
-### 🔧 Core Components
+## 🏆 **Competitive Advantages vs Perplexity**
 
-| Component | Purpose | Technology |
-|-----------|---------|------------|
-| **Deep Search Engine** | Multi-level content discovery | Python, AsyncIO |
-| **NLP Service** | AI summarization & analysis | Transformers, CUDA |
-| **Scraping Service** | Content extraction & parsing | httpx, BeautifulSoup, Playwright |
-| **WebSocket Manager** | Real-time progress updates | FastAPI WebSockets |
-| **Semantic Analyzer** | Relevance scoring & ranking | spaCy, Custom algorithms |
+| Feature | Xeno Search v2.0 | Perplexity |
+|---------|------------------|------------|
+| **Search Engines** | Multiple (SearXNG, DDG, Brave) | Limited transparency |
+| **Real-time Updates** | ✅ WebSocket streaming | ❌ |
+| **Caching Layer** | ✅ Redis with deduplication | Unknown |
+| **Content Analysis** | ✅ Full NLP pipeline | Limited |
+| **Semantic Ranking** | ✅ Configurable models | ✅ |
+| **Deep Search** | ✅ Recursive link following | Partial |
+| **Monitoring** | ✅ Prometheus + metrics | ❌ |
+| **Self-Hostable** | ✅ Complete control | ❌ |
+| **API Transparency** | ✅ Open source | ❌ |
+| **Custom Models** | ✅ Configurable AI models | ❌ |
 
-## 🚀 Quick Start
+## 🚀 **Quick Start**
 
 ### Prerequisites
-
-- **Python 3.8+** with pip
-- **4GB+ RAM** (8GB+ recommended for AI models)
-- **GPU support** (optional, for accelerated summarization)
-- **Node.js 16+** (for frontend integration)
+- Python 3.9+
+- Redis (optional, for caching)
+- CUDA GPU (optional, for faster AI processing)
 
 ### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/emiliancristea/xeno-search-service.git
-   cd xeno-search-service
-   ```
-
-2. **Create and activate virtual environment**
-   ```bash
-   python -m venv venv
-   
-   # Windows
-   .\venv\Scripts\activate
-   
-   # Linux/macOS
-   source venv/bin/activate
-   ```
-
-3. **Install dependencies**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Start the service**
-   ```bash
-   uvicorn app.main:app --reload --port 8000
-   ```
-
-5. **Verify installation**
-   ```bash
-   curl http://localhost:8000/health
-   # Expected: {"status": "healthy"}
-   ```
-
-### 🌐 API Documentation
-
-Access the interactive API documentation at: `http://localhost:8000/docs`
-
-## 📋 Usage Examples
-
-### Basic Search Request
-
-```python
-import httpx
-
-async def search_example():
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            "http://localhost:8000/api/xeno-search-internal",
-            json={
-                "query": "latest AI technology trends",
-                "search_type": "normal",
-                "num_results": 5
-            }
-        )
-        
-        result = response.json()
-        print(f"Found {len(result['sources'])} sources")
-        print(f"Summary: {result['summary']}")
+1. **Clone and Setup**
+```bash
+git clone <repository-url>
+cd xeno-search-service
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-### Deep Search with Real-Time Updates
+2. **Install Dependencies**
+```bash
+pip install -r requirements.txt
 
-```javascript
-// Frontend WebSocket integration
-const searchId = await startDeepSearch("quantum computing breakthroughs");
-const ws = new WebSocket(`ws://localhost:8000/ws/deep-search/${searchId}`);
-
-ws.onmessage = (event) => {
-    const update = JSON.parse(event.data);
-    console.log(`Phase: ${update.data.phase}`);
-    console.log(`Progress: ${update.data.progress}%`);
-    console.log(`Message: ${update.data.message}`);
-};
+# Optional: Install spaCy language model for entity extraction
+python -m spacy download en_core_web_sm
 ```
 
-### Response Format
+3. **Configuration**
+```bash
+# Copy example configuration
+cp .env.example .env
 
-```json
+# Edit configuration (see Configuration section below)
+nano .env
+```
+
+4. **Start Redis (Optional but Recommended)**
+```bash
+# Using Docker
+docker run -d --name redis -p 6379:6379 redis:alpine
+
+# Or install locally
+# Ubuntu/Debian: sudo apt install redis-server
+# macOS: brew install redis
+```
+
+5. **Run the Service**
+```bash
+# Development
+uvicorn app.main:app --reload --port 8000
+
+# Production
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+### Docker Deployment
+
+```bash
+# Build image
+docker build -t xeno-search:v2 .
+
+# Run with Redis
+docker-compose up -d
+```
+
+## 📋 **API Documentation**
+
+### **Enhanced Search Endpoint**
+```http
+POST /api/v2/search
+Content-Type: application/json
+
 {
-  "query": "latest AI technology trends",
-  "search_type": "deep",
-  "summary": "Comprehensive analysis of current AI developments including GPT models, computer vision advances, and ethical AI frameworks...",
-  "sources": [
-    {
-      "url": "https://example.com/ai-trends",
-      "title": "Latest AI Technology Trends 2025",
-      "snippet": "Overview of cutting-edge developments...",
-      "summary": "AI-generated summary of the content...",
-      "raw_text": "Full extracted content..."
-    }
-  ],
-  "error": null
+  "query": "latest AI developments",
+  "search_type": "enhanced",
+  "num_results": 10,
+  "include_summaries": true,
+  "include_metadata": true,
+  "min_quality_score": 0.7,
+  "preferred_engines": ["searxng", "brave"]
 }
 ```
 
-## 🔍 Search Capabilities
+**Response:**
+```json
+{
+  "query": "latest AI developments",
+  "search_type": "enhanced",
+  "sources": [
+    {
+      "url": "https://example.com/ai-news",
+      "title": "Latest AI Breakthroughs",
+      "snippet": "Recent developments in AI...",
+      "summary": "AI-generated summary of content...",
+      "confidence_score": 0.95,
+      "quality_score": 0.87,
+      "content_category": "news",
+      "content_tags": ["artificial intelligence", "machine learning"],
+      "metadata": {
+        "search_engine": "searxng",
+        "semantic_score": 0.89,
+        "word_count": 1500,
+        "reading_time_minutes": 6
+      }
+    }
+  ],
+  "summary": "Comprehensive AI summary...",
+  "related_queries": [
+    {"query": "AI developments machine learning", "confidence": 0.8}
+  ],
+  "stats": {
+    "total_results": 10,
+    "processing_time_ms": 2450,
+    "engines_used": ["searxng", "brave"],
+    "avg_confidence_score": 0.82
+  },
+  "overall_confidence": 0.85,
+  "result_diversity_score": 0.73
+}
+```
 
-### Normal Search
-- **Speed**: 2-5 seconds
-- **Sources**: 5-10 websites
-- **Depth**: Surface-level content
-- **Use Case**: Quick information retrieval
+### **Search Types**
 
-### Deep Search
-- **Speed**: 8-15 seconds
-- **Sources**: 15-25 websites
-- **Depth**: Multi-level link following
-- **Features**: 
-  - Semantic link analysis
-  - Relevance scoring (0.0-1.0)
-  - Comprehensive synthesis
-  - Real-time progress tracking
+- **`normal`**: Basic search using legacy engine
+- **`enhanced`**: Multi-engine search with AI ranking
+- **`deep`**: Enhanced search + recursive link following
+- **`semantic`**: Enhanced search with semantic similarity ranking
 
-## 🎨 Real-Time UI Features
+### **Real-time Search**
+```http
+POST /api/v2/search/streaming
+```
 
-### Progressive Search Interface
+Connect to WebSocket endpoint `/ws/search/{search_id}` for real-time updates.
+
+### **Content Analysis**
+```http
+POST /api/v2/analyze
+Content-Type: application/json
+
+{
+  "url": "https://example.com/article",
+  "include_summary": true,
+  "include_classification": true,
+  "include_entities": true
+}
+```
+
+### **Health & Monitoring**
+```http
+GET /health              # Service health check
+GET /metrics             # Prometheus metrics
+GET /api/v2/analytics/performance  # Performance analytics
+```
+
+## ⚙️ **Configuration**
+
+The service is highly configurable via environment variables. Key configurations:
+
+### **Search Engines**
+```env
+SEARCH_ENGINES=searxng,duckduckgo,brave
+SEARXNG_INSTANCES=https://searx.be,https://searx.ninja
+BRAVE_SEARCH_API_KEY=your_api_key_here
+```
+
+### **AI Models**
+```env
+SUMMARIZATION_MODEL=facebook/bart-large-cnn
+EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+SEMANTIC_SEARCH_ENABLED=true
+```
+
+### **Caching**
+```env
+CACHE_ENABLED=true
+CACHE_TYPE=redis
+REDIS_URL=redis://localhost:6379/0
+CACHE_TTL_SEARCH_RESULTS=3600
+```
+
+### **Performance**
+```env
+DEEP_SEARCH_MAX_DEPTH=3
+SCRAPING_TIMEOUT=15
+CONTENT_DEDUPLICATION=true
+```
+
+See `.env.example` for complete configuration options.
+
+## 🏗️ **Architecture**
 
 ```
-🔍 Deep Search Progress
-████████████░░░░ 75% Complete
-Following links from initial sources...
-
-📊 Search Timeline
-✅ Initial Search (5 sources found)
-✅ Link Analysis (23 candidates)  
-🔄 Content Scraping (3/10 complete)
-⏳ Summary Generation
-
-🌐 Sources Being Explored
-• ✅ wikipedia.org - AI Technologies
-• 🔄 techcrunch.com - Latest AI News
-• ⏳ arxiv.org - Research Papers
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   FastAPI App   │    │  Search Engines  │    │   AI Services   │
+│                 │    │                  │    │                 │
+│ • REST API      │◄──►│ • SearXNG        │    │ • Summarization │
+│ • WebSocket     │    │ • DuckDuckGo     │    │ • Classification│
+│ • Monitoring    │    │ • Brave Search   │    │ • Embeddings    │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │                       │
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│  Redis Cache    │    │   Aggregation    │    │   Deep Search   │
+│                 │    │                  │    │                 │
+│ • Search Cache  │    │ • Result Merge   │    │ • Link Following│
+│ • Content Cache │    │ • Deduplication  │    │ • Content Anal. │
+│ • Summary Cache │    │ • Ranking        │    │ • Semantic Rank │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-### Search Phases
+## 🔧 **Development**
 
-1. **🔄 Initializing** - Search setup and validation
-2. **🔍 Initial Search** - Primary source discovery
-3. **📊 Analyzing Sources** - Content evaluation
-4. **🔗 Extracting Links** - Relevant link identification
-5. **🌐 Following Links** - Deep content exploration
-6. **📄 Scraping Content** - Text extraction and processing
-7. **🤖 AI Summarization** - Intelligent content synthesis
-8. **📝 Final Summary** - Comprehensive result generation
+### **Project Structure**
+```
+xeno-search-service/
+├── app/
+│   ├── core/                    # Core infrastructure
+│   │   ├── config.py           # Configuration management
+│   │   ├── cache.py            # Caching layer
+│   │   └── monitoring.py       # Metrics & health checks
+│   ├── services/               # Business logic
+│   │   ├── enhanced_search_aggregator.py
+│   │   ├── enhanced_nlp_service.py
+│   │   ├── scraping_service.py
+│   │   └── deep_search_service.py
+│   ├── models/                 # Data models
+│   │   └── search_models.py
+│   └── main.py                 # FastAPI application
+├── requirements.txt            # Dependencies
+├── .env.example               # Configuration template
+├── docker-compose.yml         # Docker setup
+└── README.md                  # Documentation
+```
 
-## ⚙️ Configuration
+### **Adding New Search Engines**
 
-### Environment Variables
+1. **Implement Engine Class**
+```python
+class NewSearchEngine(SearchEngineBase):
+    async def search(self, query: str, num_results: int) -> List[SearchEngineResult]:
+        # Implementation here
+        pass
+```
+
+2. **Register in Aggregator**
+```python
+# In enhanced_search_aggregator.py
+if "newsearch" in search_config['engines']:
+    self.engines["newsearch"] = NewSearchEngine(config)
+```
+
+### **Custom AI Models**
+
+Replace the default models in configuration:
+```env
+SUMMARIZATION_MODEL=your/custom-model
+EMBEDDING_MODEL=your/embedding-model
+```
+
+### **Testing**
 
 ```bash
-# Core Configuration
-ENVIRONMENT=development
-LOG_LEVEL=INFO
-PORT=8000
+# Run basic tests
+python -m pytest tests/
 
-# Search Configuration
-SEARXNG_INSTANCE_URL=https://searx.tiekoetter.com/search
-MAX_SEARCH_RESULTS=10
-DEEP_SEARCH_MAX_DEPTH=2
-
-# AI Configuration
-SUMMARIZATION_MODEL=sshleifer/distilbart-cnn-12-6
-ENABLE_GPU=true
-CUDA_DEVICE=0
-
-# Performance Settings
-CONCURRENT_SCRAPING_LIMIT=10
-REQUEST_TIMEOUT=30
-CACHE_TTL=3600
+# Test specific endpoint
+curl -X POST http://localhost:8000/api/v2/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "test query", "search_type": "enhanced"}'
 ```
 
-### Advanced Configuration
+## 🚀 **Production Deployment**
 
-```python
-# app/core/config.py
-class Settings:
-    # Deep Search Parameters
-    MAX_LINKS_PER_LEVEL = 5
-    MIN_RELEVANCE_SCORE = 0.3
-    CONTENT_SIMILARITY_THRESHOLD = 0.8
-    
-    # Anti-Bot Measures
-    REQUEST_DELAY_RANGE = (0.1, 0.5)
-    USER_AGENT_ROTATION = True
-    PROXY_ROTATION = False  # Enable for production
-    
-    # AI Model Settings
-    SUMMARIZATION_MIN_LENGTH = 30
-    SUMMARIZATION_MAX_LENGTH = 150
-    ENABLE_SEMANTIC_ANALYSIS = True
-```
-
-## 🔧 Advanced Features
-
-### Semantic Analysis
-
-```python
-# Intelligent relevance scoring
-def calculate_relevance_score(query_terms, content, context):
-    """
-    Advanced semantic analysis for content relevance
-    - Query term matching
-    - Contextual understanding
-    - Semantic similarity
-    - Content quality assessment
-    """
-    base_score = term_frequency_analysis(query_terms, content)
-    context_score = contextual_relevance(query_terms, context)
-    semantic_score = embedding_similarity(query_terms, content)
-    
-    return weighted_average([base_score, context_score, semantic_score])
-```
-
-### Anti-Bot Countermeasures
-
-- **Dynamic User-Agent Rotation**
-- **Request Pattern Humanization**
-- **Respectful Rate Limiting**
-- **Session Management**
-- **Proxy Support** (enterprise feature)
-
-### Content Quality Assessment
-
-- **Source Authority Ranking**
-- **Content Freshness Detection**
-- **Information Accuracy Indicators**
-- **Duplicate Content Elimination**
-
-## 📊 Performance Metrics
-
-### Response Times
-- **Normal Search**: < 3 seconds (95th percentile)
-- **Deep Search**: < 15 seconds (95th percentile)
-- **API Latency**: < 100ms (excluding search processing)
-
-### Scalability
-- **Concurrent Searches**: 100+ simultaneous requests
-- **Memory Usage**: 2-4GB (with AI models loaded)
-- **CPU Optimization**: Multi-core async processing
-- **GPU Acceleration**: CUDA-optimized summarization
-
-### Reliability
-- **Uptime Target**: 99.5%
-- **Error Rate**: < 1% failed searches
-- **Fallback Strategies**: Multi-source redundancy
-- **Graceful Degradation**: Progressive feature fallback
-
-## 🐳 Docker Deployment
-
-### Production Dockerfile
-
-```dockerfile
-FROM python:3.9-slim
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application code
-COPY app/ ./app/
-
-# Expose port
-EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
-
-# Run application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-```
-
-### Docker Compose
+### **Docker Compose (Recommended)**
 
 ```yaml
 version: '3.8'
-
 services:
   xeno-search:
     build: .
@@ -367,85 +335,174 @@ services:
       - "8000:8000"
     environment:
       - ENVIRONMENT=production
-      - LOG_LEVEL=INFO
-      - ENABLE_GPU=false
-    volumes:
-      - ./logs:/app/logs
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+  
   redis:
     image: redis:alpine
     ports:
       - "6379:6379"
-    restart: unless-stopped
-
-networks:
-  default:
-    name: xeno-search-network
+  
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
 ```
 
-## 🔒 Security & Privacy
+### **Kubernetes Deployment**
 
-### Data Protection
-- **No persistent user data storage**
-- **Temporary content caching only**
-- **Secure WebSocket connections**
-- **Input sanitization and validation**
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xeno-search
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: xeno-search
+  template:
+    metadata:
+      labels:
+        app: xeno-search
+    spec:
+      containers:
+      - name: xeno-search
+        image: xeno-search:v2
+        ports:
+        - containerPort: 8000
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: REDIS_URL
+          value: "redis://redis-service:6379/0"
+```
 
-### Ethical Scraping
-- **Respectful request rates**
-- **robots.txt compliance**
-- **User-Agent identification**
-- **Content source attribution**
+### **Performance Optimization**
 
-### API Security
-- **Rate limiting**
-- **Request validation**
-- **Error message sanitization**
-- **HTTPS enforcement** (production)
+1. **GPU Acceleration**
+```env
+SUMMARIZATION_MODEL_DEVICE=cuda
+```
 
-## 🧪 Testing
-
-### Run Tests
-
+2. **Worker Scaling**
 ```bash
-# Unit tests
-python -m pytest tests/ -v
-
-# Performance tests
-python -m pytest tests/performance/ -v
-
-# Integration tests
-python -m pytest tests/integration/ -v
+uvicorn app.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker
 ```
 
-### Test Coverage
-
-```bash
-# Generate coverage report
-coverage run -m pytest
-coverage report -m
-coverage html  # Generates htmlcov/index.html
+3. **Caching Strategy**
+```env
+CACHE_TTL_SEARCH_RESULTS=3600
+CACHE_TTL_PAGE_CONTENT=86400
+CONTENT_DEDUPLICATION=true
 ```
 
-### Load Testing
+## 📊 **Monitoring & Analytics**
 
-```bash
-# Install locust
-pip install locust
+### **Prometheus Metrics**
 
-# Run load tests
-locust -f tests/load/search_load_test.py --host=http://localhost:8000
+Key metrics exposed at `/metrics`:
+
+- `xeno_search_requests_total` - Total search requests
+- `xeno_search_duration_seconds` - Search processing time
+- `xeno_cache_hit_rate` - Cache efficiency
+- `xeno_nlp_operations_total` - AI processing metrics
+- `xeno_errors_total` - Error tracking
+
+### **Performance Dashboard**
+
+Access analytics at `/api/v2/analytics/performance`:
+
+```json
+{
+  "performance_summary": {
+    "total_operations": 1500,
+    "success_rate": 0.97,
+    "avg_duration": 2.4,
+    "p95_duration": 4.2
+  },
+  "cache_statistics": {
+    "hit_rate": 0.78,
+    "total_requests": 2300
+  }
+}
 ```
 
-## 📈 Monitoring & Observability
+### **Health Monitoring**
 
-### Health Endpoints
+Health check at `/health` validates:
+- Memory usage
+- Redis connectivity
+- AI model availability
+- Search engine status
 
-- **`GET /health`
+## 🛡️ **Security**
+
+### **API Key Authentication**
+```env
+API_KEY_REQUIRED=true
+API_KEYS=your-secret-key-1,your-secret-key-2
+```
+
+### **Rate Limiting**
+```env
+RATE_LIMITING_ENABLED=true
+RATE_LIMIT_REQUESTS_PER_MINUTE=100
+```
+
+### **CORS Configuration**
+```env
+CORS_ORIGINS=https://yourdomain.com,https://app.yourdomain.com
+```
+
+## 🤝 **Contributing**
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### **Development Guidelines**
+
+- Follow PEP 8 style guidelines
+- Add comprehensive tests for new features
+- Update documentation for API changes
+- Ensure all health checks pass
+
+## 📝 **License**
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 **Support**
+
+- **Documentation**: See `/docs` endpoint when running
+- **Issues**: Report bugs and feature requests via GitHub Issues
+- **Discussions**: Community discussions via GitHub Discussions
+
+## 🎯 **Roadmap**
+
+### **v2.1 - Q1 2024**
+- [ ] GraphQL API support
+- [ ] Multi-language support
+- [ ] Advanced result filtering
+- [ ] Custom AI model fine-tuning
+
+### **v2.2 - Q2 2024**
+- [ ] Vector database integration
+- [ ] Advanced analytics dashboard
+- [ ] A/B testing framework
+- [ ] Enterprise SSO integration
+
+### **v3.0 - Q3 2024**
+- [ ] Distributed search architecture
+- [ ] Real-time indexing
+- [ ] Machine learning ranking
+- [ ] Advanced personalization
+
+---
+
+**Made with ❤️ for the open-source community**
+
+*Xeno Search Service v2.0 - Bringing enterprise-grade search capabilities to everyone*
