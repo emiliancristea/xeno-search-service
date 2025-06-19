@@ -11,8 +11,36 @@ python-dotenv
 readability-lxml # For better content extraction
 
 # For NLP
-transformers
-torch
+transformers>=4.35.0
+torch>=2.0.0
+sentence-transformers  # For semantic similarity
 sentencepiece
-# spacy # For later, more advanced NLP tasks
-# nltk # For later, more advanced NLP tasks
+
+# Enhanced search engines
+searxng-client  # For SearXNG integration
+requests
+aiohttp
+
+# Caching and Performance
+redis
+aioredis
+cachetools
+
+# Monitoring and Logging
+structlog
+prometheus-client
+opentelemetry-api
+opentelemetry-sdk
+
+# Enhanced data processing
+pandas
+numpy
+scikit-learn
+
+# Web scraping enhancements
+selenium
+playwright
+
+# Configuration and Environment
+pydantic-settings
+python-decouple
