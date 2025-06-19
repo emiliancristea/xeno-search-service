@@ -3,7 +3,6 @@ from bs4 import BeautifulSoup
 from typing import List, Dict, Optional, Any
 import asyncio
 import urllib.parse
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from readability import Document # For readability-lxml
 
 from app.models.search_models import Source #Pydantic model for structuring results

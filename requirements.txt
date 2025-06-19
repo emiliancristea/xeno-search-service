@@ -39,7 +39,6 @@ scikit-learn
 
 # Web scraping enhancements
 selenium
-playwright
 
 # Configuration and Environment
 pydantic-settings
