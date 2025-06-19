@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request, Response
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Request, Response, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -30,6 +30,15 @@ logger = structlog.get_logger(__name__)
 # Global configuration
 config = get_config()
 monitor = get_monitor()
+
+
+async def require_api_key(x_api_key: Optional[str] = Header(None, alias="X-API-Key")):
+    """Optional API key authentication"""
+    if not config.api_key_required:
+        return
+
+    if not x_api_key or x_api_key not in config.api_keys:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 @asynccontextmanager
@@ -112,6 +121,40 @@ async def monitoring_middleware(request: Request, call_next):
     return response
 
 
+class RateLimitMiddleware:
+    """Simple in-memory IP-based rate limiting"""
+
+    def __init__(self, app: FastAPI):
+        self.app = app
+        self.ip_requests: Dict[str, List[float]] = {}
+
+    async def __call__(self, request: Request, call_next):
+        if not config.rate_limiting_enabled:
+            return await call_next(request)
+
+        ip = request.client.host if request.client else "anonymous"
+        now = time.time()
+
+        minute_limit = config.rate_limit_requests_per_minute
+        hour_limit = config.rate_limit_requests_per_hour
+
+        timestamps = self.ip_requests.get(ip, [])
+        timestamps = [t for t in timestamps if now - t < 3600]
+
+        minute_count = len([t for t in timestamps if now - t < 60])
+
+        if minute_count >= minute_limit or len(timestamps) >= hour_limit:
+            return Response(status_code=429, content="Rate limit exceeded")
+
+        timestamps.append(now)
+        self.ip_requests[ip] = timestamps
+
+        return await call_next(request)
+
+
+app.add_middleware(RateLimitMiddleware)
+
+
 # WebSocket connection manager for real-time updates
 class EnhancedWebSocketManager:
     def __init__(self):
@@ -166,7 +209,7 @@ websocket_manager = EnhancedWebSocketManager()
 
 # Enhanced search endpoint with full feature set
 @app.post("/api/v2/search", response_model=SearchResponse)
-async def enhanced_search_endpoint(request: SearchRequest):
+async def enhanced_search_endpoint(request: SearchRequest, api_key: None = Depends(require_api_key)):
     """
     Enhanced search endpoint with comprehensive features
     """
@@ -455,7 +498,7 @@ async def _generate_related_queries(query: str, sources: List[Source]) -> List[R
 
 # Legacy endpoint for backward compatibility
 @app.post("/api/xeno-search-internal", response_model=SearchResponse)
-async def legacy_search_endpoint(request: SearchRequest):
+async def legacy_search_endpoint(request: SearchRequest, api_key: None = Depends(require_api_key)):
     """Legacy search endpoint for backward compatibility"""
     # Convert to new format and delegate
     return await enhanced_search_endpoint(request)
@@ -482,7 +525,7 @@ async def search_websocket(websocket: WebSocket, search_id: str):
 
 # Advanced search endpoint with real-time updates
 @app.post("/api/v2/search/streaming")
-async def streaming_search_endpoint(request: SearchRequest):
+async def streaming_search_endpoint(request: SearchRequest, api_key: None = Depends(require_api_key)):
     """Start a streaming search with WebSocket updates"""
     search_id = f"search-{uuid.uuid4().hex[:12]}"
     
@@ -552,7 +595,8 @@ async def analyze_content_endpoint(
     include_summary: bool = True,
     include_classification: bool = True,
     include_entities: bool = True,
-    include_keywords: bool = True
+    include_keywords: bool = True,
+    api_key: None = Depends(require_api_key)
 ):
     """Analyze content from URL or text"""
     if not url and not text:

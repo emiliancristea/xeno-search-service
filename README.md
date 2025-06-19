@@ -33,7 +33,7 @@ A comprehensive, scalable search service featuring multi-engine aggregation, adv
 
 ### 🛡️ **Production Ready**
 - **Comprehensive Configuration**: 100+ configurable parameters
-- **Security Features**: API key authentication, CORS, rate limiting
+- **Security Features**: Optional API key authentication and rate limiting
 - **Error Handling**: Graceful degradation and detailed error reporting
 - **Docker Support**: Container-ready with optimized builds
 
@@ -444,12 +444,14 @@ Health check at `/health` validates:
 API_KEY_REQUIRED=true
 API_KEYS=your-secret-key-1,your-secret-key-2
 ```
+When enabled, clients must include the `X-API-Key` header with one of the allowed keys.
 
 ### **Rate Limiting**
 ```env
 RATE_LIMITING_ENABLED=true
 RATE_LIMIT_REQUESTS_PER_MINUTE=100
 ```
+Limits are applied per IP address to protect the service from abuse.
 
 ### **CORS Configuration**
 ```env
