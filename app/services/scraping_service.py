@@ -4,6 +4,7 @@ from typing import List, Dict, Optional, Any
 import asyncio
 import urllib.parse
 from readability import Document # For readability-lxml
+from app.core.config import get_config
 
 from app.models.search_models import Source #Pydantic model for structuring results
 from app.services.nlp_service import summarize_text_async # Import the summarizer
@@ -26,6 +27,17 @@ HEADERS = {
 # Chosen SearXNG public instance - updated to a different public instance
 SEARXNG_INSTANCE_URL = "https://searx.tiekoetter.com/search"
 
+_config = get_config()
+
+def _build_headers() -> dict:
+    if _config.user_agent_rotation and _config.user_agents:
+        import random
+        ua = random.choice(list(_config.user_agents))
+        h = dict(HEADERS)
+        h['User-Agent'] = ua
+        return h
+    return HEADERS
+
 async def _get_duckduckgo_html_results(query: str, num_results: int = 10) -> List[Dict[str, str]]:
     """
     Fetches search results from DuckDuckGo HTML version using httpx.
@@ -36,7 +48,7 @@ async def _get_duckduckgo_html_results(query: str, num_results: int = 10) -> Lis
     search_url = f"https://html.duckduckgo.com/html/?q={urllib.parse.quote_plus(query)}"
 
     try:
-        async with httpx.AsyncClient(headers=HEADERS, timeout=10.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(headers=_build_headers(), timeout=10.0, follow_redirects=True) as client:
             print(f"Querying DuckDuckGo HTML: {search_url}")
             response = await client.get(search_url)
             response.raise_for_status()
@@ -126,7 +138,7 @@ async def _scrape_page_content(url: str) -> Dict[str, Optional[str]]:
     page_summary: Optional[str] = None # Initialize summary
 
     try:
-        async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True, timeout=30.0) as client:
+        async with httpx.AsyncClient(headers=_build_headers(), follow_redirects=True, timeout=30.0) as client:
             response = await client.get(url)
             response.raise_for_status()
             

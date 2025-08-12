@@ -245,12 +245,12 @@ async def enhanced_search_endpoint(request: SearchRequest, api_key: None = Depen
             
             # Perform search based on type
             if request.search_type == SearchType.ENHANCED:
-                sources = await perform_enhanced_search(request.query, request.num_results)
+                sources = await perform_enhanced_search(request.query, request.num_results, language=request.language, time_range=request.time_range)
                 search_stats.engines_used = list(config.search_engines)
                 
             elif request.search_type == SearchType.DEEP:
                 # First get initial results
-                initial_sources = await perform_enhanced_search(request.query, request.num_results)
+                initial_sources = await perform_enhanced_search(request.query, request.num_results, language=request.language, time_range=request.time_range)
                 # Then perform deep search
                 if initial_sources:
                     all_sources, comprehensive_summary = await perform_deep_search_analysis(
@@ -261,7 +261,7 @@ async def enhanced_search_endpoint(request: SearchRequest, api_key: None = Depen
                 
             elif request.search_type == SearchType.SEMANTIC:
                 # Enhanced semantic search
-                sources = await perform_enhanced_search(request.query, request.num_results)
+                sources = await perform_enhanced_search(request.query, request.num_results, language=request.language, time_range=request.time_range)
                 # Additional semantic ranking will be applied in the aggregator
                 search_stats.engines_used = list(config.search_engines)
                 
@@ -273,6 +273,8 @@ async def enhanced_search_endpoint(request: SearchRequest, api_key: None = Depen
             # Enhanced content processing
             if sources and request.include_summaries:
                 await _process_sources_with_enhanced_nlp(sources, request.query)
+                # Final content-aware rerank
+                sources = await _final_rerank_with_content(request.query, sources)
             
             # Apply content filtering
             if request.min_quality_score:
@@ -405,6 +407,43 @@ async def _process_sources_with_enhanced_nlp(sources: List[Source], query: str):
             except Exception as e:
                 logger.warning("Failed to process source with NLP", 
                              url=source.url, error=str(e))
+
+async def _final_rerank_with_content(query: str, sources: List[Source]) -> List[Source]:
+    """After NLP, rerank using semantic similarity on summaries/raw text and apply domain diversification."""
+    try:
+        if not sources:
+            return sources
+        nlp_service = await get_enhanced_nlp_service()
+        texts = []
+        for s in sources:
+            if s.summary and s.summary.strip():
+                texts.append(s.summary)
+            elif s.snippet:
+                texts.append(s.snippet)
+            elif s.raw_text:
+                texts.append(s.raw_text[:2000])
+            else:
+                texts.append("")
+        sims = await nlp_service.calculate_semantic_similarity(query, texts)
+        # Attach scores
+        for s, sc in zip(sources, sims):
+            if s.confidence_score is None:
+                s.confidence_score = float(sc)
+            else:
+                s.confidence_score = float(0.6 * s.confidence_score + 0.4 * sc)
+        # Simple domain diversification
+        max_per_domain = getattr(config, 'max_results_per_domain', 2)
+        domain_counts: Dict[str, int] = {}
+        diversified: List[Source] = []
+        for s in sorted(sources, key=lambda x: (x.confidence_score or 0), reverse=True):
+            domain = s.get_domain() or ""
+            if domain_counts.get(domain, 0) < max_per_domain:
+                diversified.append(s)
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
+        return diversified
+    except Exception as e:
+        logger.warning("Final content-based rerank failed", error=str(e))
+        return sources
 
 
 def _filter_sources_by_category(sources: List[Source], 
@@ -547,7 +586,7 @@ async def perform_streaming_search(search_id: str, request: SearchRequest):
         )
         
         # Perform the actual search
-        sources = await perform_enhanced_search(request.query, request.num_results)
+        sources = await perform_enhanced_search(request.query, request.num_results, language=request.language, time_range=request.time_range)
         
         await websocket_manager.send_progress_update(
             search_id, "processing", 60, f"📊 Processing {len(sources)} sources..."

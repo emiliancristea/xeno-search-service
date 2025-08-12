@@ -16,7 +16,7 @@ torch>=2.0.0
 sentence-transformers  # For semantic similarity
 sentencepiece
 
-# Enhanced search engines
+ # Enhanced search engines
 searxng-client  # For SearXNG integration
 requests
 aiohttp
@@ -39,6 +39,7 @@ scikit-learn
 
 # Web scraping enhancements
 selenium
+trafilatura
 
 # Configuration and Environment
 pydantic-settings

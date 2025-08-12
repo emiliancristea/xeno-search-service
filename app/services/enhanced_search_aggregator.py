@@ -3,9 +3,9 @@ import random
 import aiohttp
 import httpx
 import json
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import List, Dict, Any, Optional, Tuple, Set, Callable
 from dataclasses import dataclass
-from urllib.parse import quote_plus, urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse, parse_qsl, urlunparse, urlencode
 from bs4 import BeautifulSoup
 import structlog
 from sentence_transformers import SentenceTransformer
@@ -89,8 +89,9 @@ class SearXNGEngine(SearchEngineBase):
                     'format': 'json',
                     'engines': 'google,bing,duckduckgo,startpage',
                     'categories': 'general',
-                    'language': 'en',
-                    'time_range': '',
+                    # language and time_range can be overridden at call-site via query formatting if needed
+                    'language': self.config.get('language', 'en'),
+                    'time_range': self.config.get('time_range', ''),
                     'safesearch': '1'
                 }
                 
@@ -296,9 +297,9 @@ class BraveSearchEngine(SearchEngineBase):
             'q': query,
             'count': min(num_results, 20),  # Brave API limit
             'offset': 0,
-            'country': 'US',
-            'search_lang': 'en',
-            'ui_lang': 'en-US',
+            'country': self.config.get('country', 'US'),
+            'search_lang': self.config.get('language', 'en'),
+            'ui_lang': self.config.get('ui_lang', 'en-US'),
             'text_decorations': False,
             'result_filter': 'web'
         }
@@ -355,6 +356,7 @@ class EnhancedSearchAggregator:
         self.semantic_model: Optional[SentenceTransformer] = None
         self.tfidf_vectorizer = TfidfVectorizer(stop_words='english', max_features=1000)
         self.monitor = get_monitor()
+        self.cross_encoder: Optional[Any] = None
         
         # Initialize search engines
         self._initialize_engines()
@@ -362,6 +364,9 @@ class EnhancedSearchAggregator:
         # Initialize semantic model if enabled
         if self.config.semantic_search_enabled:
             self._initialize_semantic_model()
+        # Cross-encoder is optional
+        if getattr(self.config, 'enable_cross_encoder', False):
+            self._initialize_cross_encoder()
     
     def _initialize_engines(self):
         """Initialize all configured search engines"""
@@ -408,13 +413,28 @@ class EnhancedSearchAggregator:
             logger.error("Failed to load semantic model", error=str(e))
             self.semantic_model = None
     
-    async def search_all_engines(self, query: str, num_results_per_engine: int = 15) -> Dict[str, List[SearchEngineResult]]:
+    def _initialize_cross_encoder(self):
+        """Initialize optional cross-encoder for reranking"""
+        try:
+            from sentence_transformers import CrossEncoder
+            model_name = getattr(self.config, 'cross_encoder_model', 'cross-encoder/ms-marco-MiniLM-L-6-v2')
+            logger.info("Loading cross-encoder model", model=model_name)
+            self.cross_encoder = CrossEncoder(model_name)
+            logger.info("Cross-encoder model loaded successfully")
+        except Exception as e:
+            logger.warning("Failed to load cross-encoder model", error=str(e))
+            self.cross_encoder = None
+    
+    async def search_all_engines(self, query: str, num_results_per_engine: int = 15, language: Optional[str] = None, time_range: Optional[str] = None) -> Dict[str, List[SearchEngineResult]]:
         """Search all enabled engines concurrently"""
         tasks = []
         engine_names = []
         
         for name, engine in self.engines.items():
             if engine.is_enabled():
+                # Thread optional language/time_range to engine-local config for this call
+                engine.config['language'] = language or getattr(self.config, 'language', 'en')
+                engine.config['time_range'] = time_range or getattr(self.config, 'time_range', '')
                 tasks.append(engine.search(query, num_results_per_engine))
                 engine_names.append(name)
         
@@ -503,8 +523,13 @@ class EnhancedSearchAggregator:
         """Normalize URL for deduplication"""
         try:
             parsed = urlparse(url.lower())
-            # Remove common tracking parameters
-            clean_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            # Remove tracking parameters while preserving canonical ones
+            tracking_prefixes = ("utm_", "fbclid", "gclid", "ref", "ref_src")
+            query_params = [(k, v) for k, v in parse_qsl(parsed.query) if not k.startswith(tracking_prefixes)]
+            clean_query = urlencode(query_params)
+            clean = parsed._replace(query=clean_query, fragment="")
+            clean_url = urlunparse(clean)
+            # Remove trailing slash
             return clean_url.rstrip('/')
         except:
             return url.lower()
@@ -560,33 +585,45 @@ class EnhancedSearchAggregator:
         # Deduplicate results
         deduplicated = self._deduplicate_results(all_results)
         
-        # Calculate semantic relevance if enabled
-        if self.config.semantic_search_enabled:
-            # We need the original query for this - it should be passed as parameter
-            # For now, skip semantic ranking in this method
-            pass
+        # Sort by confidence score first
+        prelim_ranked = sorted(deduplicated, key=lambda x: x.confidence_score, reverse=True)
         
-        # Sort by confidence score (descending)
-        ranked_results = sorted(deduplicated, key=lambda x: x.confidence_score, reverse=True)
+        # Apply domain diversification cap before final trim
+        max_per_domain = getattr(self.config, 'max_results_per_domain', 2)
+        domain_counts: Dict[str, int] = {}
+        diversified: List[SearchEngineResult] = []
+        for item in prelim_ranked:
+            domain = urlparse(item.url).netloc.lower() if item.url else ""
+            if domain_counts.get(domain, 0) < max_per_domain:
+                diversified.append(item)
+                domain_counts[domain] = domain_counts.get(domain, 0) + 1
         
-        # Return top results
-        return ranked_results[:target_count]
+        # Return a larger pool; caller will apply semantic and/or cross-encoder rerank then trim
+        return diversified[: max(target_count * getattr(self.config, 'candidate_multiplier_before_trim', 3), target_count)]
     
     @track_operation("enhanced_search_aggregation")
-    async def search(self, query: str, num_results: int = 10) -> List[Source]:
+    async def search(self, query: str, num_results: int = 10, language: Optional[str] = None, time_range: Optional[str] = None) -> List[Source]:
         """Perform enhanced search across multiple engines"""
         logger.info("Starting enhanced search", query=query, num_results=num_results)
         
         # Check cache first
         cache_manager = await get_cache_manager()
-        cached_results = await cache_manager.get_search_results(query, "enhanced", num_results)
+        cached_results = await cache_manager.get_search_results(query, "enhanced", num_results, language=language, time_range=time_range)
         if cached_results:
             logger.info("Returning cached search results", query=query)
             return cached_results
         
         try:
+            # Temporarily override config fields for cache key consistency
+            prev_lang = getattr(self.config, 'language', None)
+            prev_tr = getattr(self.config, 'time_range', None)
+            if language is not None:
+                setattr(self.config, 'language', language)
+            if time_range is not None:
+                setattr(self.config, 'time_range', time_range)
             # Search all engines
-            engine_results = await self.search_all_engines(query, num_results * 2)
+            pool_multiplier = max(2, getattr(self.config, 'candidate_multiplier_before_trim', 3))
+            engine_results = await self.search_all_engines(query, num_results * pool_multiplier, language=language, time_range=time_range)
             
             if not engine_results or not any(engine_results.values()):
                 logger.warning("No results from any search engine", query=query)
@@ -595,15 +632,27 @@ class EnhancedSearchAggregator:
             # Rank and merge results
             merged_results = self._rank_and_merge_results(engine_results, num_results)
             
-            # Calculate semantic relevance if enabled
+            # Calculate semantic relevance if enabled (before final trim)
             if self.config.semantic_search_enabled and merged_results:
                 merged_results = self._calculate_semantic_relevance(query, merged_results)
-                # Re-sort after semantic scoring
                 merged_results.sort(key=lambda x: x.confidence_score, reverse=True)
             
-            # Convert to Source objects
+            # Optional cross-encoder rerank on top-K candidates
+            if getattr(self.config, 'enable_cross_encoder', False) and self.cross_encoder and merged_results:
+                top_k = min(len(merged_results), getattr(self.config, 'max_candidates_for_rerank', 50))
+                pairs = [(query, f"{r.title} {r.snippet}") for r in merged_results[:top_k]]
+                try:
+                    scores = self.cross_encoder.predict(pairs)
+                    for i, s in enumerate(scores):
+                        merged_results[i].confidence_score = float(0.5 * merged_results[i].confidence_score + 0.5 * s)
+                    merged_results.sort(key=lambda x: x.confidence_score, reverse=True)
+                except Exception as e:
+                    logger.warning("Cross-encoder rerank failed", error=str(e))
+            
+            # Convert to Source objects (final top N)
+            final_ranked = merged_results[:num_results]
             sources = []
-            for result in merged_results:
+            for result in final_ranked:
                 source = Source(
                     url=result.url,
                     title=result.title,
@@ -620,7 +669,7 @@ class EnhancedSearchAggregator:
                 sources.append(source)
             
             # Cache results
-            await cache_manager.set_search_results(query, "enhanced", num_results, sources)
+            await cache_manager.set_search_results(query, "enhanced", num_results, sources, language=language, time_range=time_range)
             
             logger.info("Enhanced search completed", 
                        query=query, 
@@ -633,6 +682,12 @@ class EnhancedSearchAggregator:
             logger.error("Enhanced search failed", query=query, error=str(e))
             self.monitor.record_error("enhanced_search", str(e))
             raise
+        finally:
+            # Restore previous config overrides
+            if language is not None:
+                setattr(self.config, 'language', prev_lang)
+            if time_range is not None:
+                setattr(self.config, 'time_range', prev_tr)
 
 
 # Global instance
@@ -644,7 +699,7 @@ async def get_enhanced_search_aggregator() -> EnhancedSearchAggregator:
     return enhanced_search_aggregator
 
 
-async def perform_enhanced_search(query: str, num_results: int = 10) -> List[Source]:
+async def perform_enhanced_search(query: str, num_results: int = 10, language: Optional[str] = None, time_range: Optional[str] = None) -> List[Source]:
     """Convenience function to perform enhanced search"""
     aggregator = await get_enhanced_search_aggregator()
-    return await aggregator.search(query, num_results)
+    return await aggregator.search(query, num_results, language=language, time_range=time_range)

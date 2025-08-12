@@ -368,7 +368,7 @@ class EnhancedCacheManager:
         """Generate content hash for deduplication"""
         return hashlib.sha256(content.encode()).hexdigest()
     
-    async def get_search_results(self, query: str, search_type: str, num_results: int) -> Optional[Any]:
+    async def get_search_results(self, query: str, search_type: str, num_results: int, language: Optional[str] = None, time_range: Optional[str] = None) -> Optional[Any]:
         """Get cached search results"""
         if not self.backend:
             return None
@@ -378,7 +378,9 @@ class EnhancedCacheManager:
                 "search_results",
                 query=query,
                 search_type=search_type,
-                num_results=num_results
+                num_results=num_results,
+                language=language,
+                time_range=time_range
             )
             
             result = await self.backend.get(key)
@@ -395,7 +397,7 @@ class EnhancedCacheManager:
             logger.error("Cache get error for search results", error=str(e))
             return None
     
-    async def set_search_results(self, query: str, search_type: str, num_results: int, results: Any) -> bool:
+    async def set_search_results(self, query: str, search_type: str, num_results: int, results: Any, language: Optional[str] = None, time_range: Optional[str] = None) -> bool:
         """Cache search results"""
         if not self.backend:
             return False
@@ -405,7 +407,9 @@ class EnhancedCacheManager:
                 "search_results",
                 query=query,
                 search_type=search_type,
-                num_results=num_results
+                num_results=num_results,
+                language=language,
+                time_range=time_range
             )
             
             ttl = self.config.cache_ttl_search_results

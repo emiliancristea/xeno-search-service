@@ -67,6 +67,15 @@ class XenoConfig(BaseSettings):
     semantic_search_enabled: bool = Field(default=True, env="SEMANTIC_SEARCH_ENABLED")
     semantic_similarity_threshold: float = Field(default=0.3, env="SEMANTIC_SIMILARITY_THRESHOLD")
     
+    # === Ranking and Reranking Configuration ===
+    enable_cross_encoder: bool = Field(default=False, env="ENABLE_CROSS_ENCODER")
+    cross_encoder_model: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2", env="CROSS_ENCODER_MODEL")
+    max_candidates_for_rerank: int = Field(default=50, env="MAX_CANDIDATES_FOR_RERANK")
+    candidate_multiplier_before_trim: int = Field(default=3, env="CANDIDATE_MULTIPLIER_BEFORE_TRIM")
+    max_results_per_domain: int = Field(default=2, env="MAX_RESULTS_PER_DOMAIN")
+    freshness_boost_enabled: bool = Field(default=True, env="FRESHNESS_BOOST_ENABLED")
+    freshness_decay_half_life_days: int = Field(default=7, env="FRESHNESS_DECAY_HALF_LIFE_DAYS")
+    
     # === Caching Configuration ===
     cache_enabled: bool = Field(default=True, env="CACHE_ENABLED")
     cache_type: str = Field(default="redis", env="CACHE_TYPE")  # redis, memory, file
@@ -102,6 +111,9 @@ class XenoConfig(BaseSettings):
         ],
         env="USER_AGENTS"
     )
+    respect_robots: bool = Field(default=True, env="RESPECT_ROBOTS")
+    playwright_enabled: bool = Field(default=False, env="PLAYWRIGHT_ENABLED")
+    trafilatura_enabled: bool = Field(default=False, env="TRAFILATURA_ENABLED")
     
     # Proxy configuration
     proxy_enabled: bool = Field(default=False, env="PROXY_ENABLED")
