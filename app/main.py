@@ -25,6 +25,11 @@ from app.services.enhanced_nlp_service import get_enhanced_nlp_service
 from app.services.scraping_service import perform_search as legacy_search, _scrape_page_content
 from app.services.deep_search_service import perform_deep_search_analysis
 
+# Import Xeno Search Engine components
+from app.engine.crawler import XenoCrawler, CrawlConfig, CrawlResult
+from app.engine.indexer import XenoIndexer, IndexConfig, PageRankCalculator
+from app.engine.search import XenoSearchEngine, SearchConfig
+
 logger = structlog.get_logger(__name__)
 
 # Global configuration
@@ -195,7 +200,10 @@ class RateLimitMiddleware:
         return await call_next(request)
 
 
-app.add_middleware(RateLimitMiddleware)
+# Only add rate limiting middleware if enabled
+if config.rate_limiting_enabled:
+    from starlette.middleware.base import BaseHTTPMiddleware
+    app.add_middleware(BaseHTTPMiddleware, dispatch=RateLimitMiddleware(app).__call__)
 
 
 # WebSocket connection manager for real-time updates
@@ -774,25 +782,343 @@ async def root():
     return {
         "service": "Xeno Search Service",
         "version": config.service_version,
-        "description": "Production-ready AI-powered search and analysis service",
+        "description": "Production-ready AI-powered search and analysis service with custom search engine",
         "status": "operational",
         "features": [
             "Multi-engine search aggregation",
-            "Advanced AI summarization", 
+            "Advanced AI summarization",
             "Semantic search and ranking",
             "Deep link analysis",
             "Real-time progress updates",
             "Comprehensive content analysis",
             "Redis caching with deduplication",
-            "Prometheus metrics and monitoring"
+            "Prometheus metrics and monitoring",
+            "🔍 Xeno Search Engine - Custom web crawler",
+            "🗃️ Xeno Search Engine - Meilisearch indexing",
+            "📊 Xeno Search Engine - PageRank algorithm"
         ],
+        "xeno_engine": {
+            "search": "/api/v2/engine/search",
+            "crawl": "/api/v2/engine/crawl",
+            "stats": "/api/v2/engine/stats",
+            "domains": "/api/v2/engine/domains"
+        },
         "docs_url": "/docs" if config.debug else None,
         "health_url": "/health",
         "metrics_url": "/metrics"
     }
 
-# To run this (after creating the directory structure and installing dependencies):
-# Ensure you are in the 'xeno-search-service' directory.
-# 1. Create and activate virtual environment (e.g., python -m venv venv; source venv/bin/activate or venv\Scripts\activate on Windows)
-# 2. Install FastAPI and Uvicorn: pip install fastapi uvicorn[standard]
-# 3. Run the server: uvicorn app.main:app --reload --port 8000
+# ============================================================================
+# XENO SEARCH ENGINE - Custom Crawler & Index API
+# ============================================================================
+
+from pydantic import BaseModel, Field
+from typing import Optional as OptionalType
+
+# Pydantic models for Xeno Search Engine
+class XenoEngineSearchRequest(BaseModel):
+    """Request model for searching the custom index"""
+    query: str = Field(..., min_length=1, max_length=500)
+    page: int = Field(default=1, ge=1)
+    per_page: int = Field(default=10, ge=1, le=50)
+    domain: OptionalType[str] = None
+    language: OptionalType[str] = None
+    min_word_count: OptionalType[int] = None
+    sort_by: OptionalType[str] = None
+
+
+class XenoCrawlRequest(BaseModel):
+    """Request model for starting a crawl job"""
+    seed_urls: List[str] = Field(..., min_items=1, max_items=10)
+    max_pages: int = Field(default=100, ge=1, le=10000)
+    max_depth: int = Field(default=5, ge=1, le=10)
+    follow_external: bool = False
+
+
+# Global crawl job storage (in production, use Redis or database)
+crawl_jobs: Dict[str, Dict[str, Any]] = {}
+
+# Global Xeno Search Engine instance
+xeno_search_engine: OptionalType[XenoSearchEngine] = None
+
+
+async def get_xeno_search_engine() -> XenoSearchEngine:
+    """Get or create Xeno Search Engine instance"""
+    global xeno_search_engine
+    if xeno_search_engine is None:
+        # Configure to use Meilisearch (use docker network name in production)
+        meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+        search_config = SearchConfig(
+            host=meili_host,
+            api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+        )
+        xeno_search_engine = XenoSearchEngine(search_config)
+    return xeno_search_engine
+
+
+# Search using our custom index
+@app.post("/api/v2/engine/search")
+async def xeno_engine_search(request: XenoEngineSearchRequest):
+    """
+    Search using Xeno Search Engine's custom index
+
+    This searches your own crawled and indexed content, not external search engines.
+    """
+    try:
+        engine = await get_xeno_search_engine()
+
+        response = await engine.search(
+            query=request.query,
+            page=request.page,
+            per_page=request.per_page,
+            domain=request.domain,
+            language=request.language,
+            min_word_count=request.min_word_count,
+            sort_by=request.sort_by
+        )
+
+        logger.info("Xeno engine search completed",
+                   query=request.query,
+                   results=len(response.results),
+                   total_hits=response.total_hits)
+
+        return response.to_dict()
+
+    except Exception as e:
+        logger.error("Xeno engine search failed", query=request.query, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
+# Get search suggestions
+@app.get("/api/v2/engine/suggest")
+async def xeno_engine_suggest(query: str, limit: int = 5):
+    """Get search suggestions based on indexed content"""
+    try:
+        engine = await get_xeno_search_engine()
+        suggestions = await engine.suggest(query, limit)
+        return {"query": query, "suggestions": suggestions}
+    except Exception as e:
+        logger.error("Xeno engine suggest failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Get indexed domains
+@app.get("/api/v2/engine/domains")
+async def xeno_engine_domains(limit: int = 20):
+    """Get list of indexed domains with document counts"""
+    try:
+        engine = await get_xeno_search_engine()
+        domains = await engine.get_domains(limit)
+        return {"domains": domains, "count": len(domains)}
+    except Exception as e:
+        logger.error("Xeno engine get domains failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Get index statistics
+@app.get("/api/v2/engine/stats")
+async def xeno_engine_stats():
+    """Get search engine index statistics"""
+    try:
+        engine = await get_xeno_search_engine()
+        stats = await engine.get_stats()
+        health = await engine.health_check()
+
+        return {
+            "index_stats": stats,
+            "healthy": health,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error("Xeno engine stats failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Start a crawl job
+@app.post("/api/v2/engine/crawl")
+async def start_crawl_job(request: XenoCrawlRequest):
+    """
+    Start a new web crawling job
+
+    The crawler will:
+    1. Start from the seed URLs
+    2. Crawl up to max_pages following links
+    3. Index all crawled content into Meilisearch
+    """
+    job_id = f"crawl-{uuid.uuid4().hex[:12]}"
+
+    # Store job info
+    crawl_jobs[job_id] = {
+        "id": job_id,
+        "status": "queued",
+        "seed_urls": request.seed_urls,
+        "max_pages": request.max_pages,
+        "max_depth": request.max_depth,
+        "follow_external": request.follow_external,
+        "pages_crawled": 0,
+        "pages_indexed": 0,
+        "errors": 0,
+        "started_at": None,
+        "completed_at": None,
+        "created_at": datetime.utcnow().isoformat()
+    }
+
+    # Start crawl in background
+    asyncio.create_task(run_crawl_job(job_id, request))
+
+    logger.info("Crawl job started", job_id=job_id, seed_urls=request.seed_urls)
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "message": f"Crawl job started with {len(request.seed_urls)} seed URLs"
+    }
+
+
+async def run_crawl_job(job_id: str, request: XenoCrawlRequest):
+    """Background task to run a crawl job"""
+    try:
+        crawl_jobs[job_id]["status"] = "running"
+        crawl_jobs[job_id]["started_at"] = datetime.utcnow().isoformat()
+
+        # Configure crawler
+        meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+        redis_url = config.redis_url if hasattr(config, 'redis_url') else "redis://localhost:6379/2"
+
+        crawl_config = CrawlConfig(
+            max_pages_per_domain=request.max_pages,
+            max_depth=request.max_depth,
+            follow_external_links=request.follow_external,
+            delay_between_requests=1.0,
+            respect_robots_txt=True
+        )
+
+        crawler = XenoCrawler(redis_url=redis_url, config=crawl_config)
+
+        # Initialize indexer
+        index_config = IndexConfig(
+            host=meili_host,
+            api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+        )
+        indexer = XenoIndexer(index_config)
+        await indexer.initialize()
+
+        # Crawl with real-time indexing callback
+        crawled_results: List[CrawlResult] = []
+
+        async def on_page_crawled(result: CrawlResult):
+            """Index each page as it's crawled"""
+            crawled_results.append(result)
+            crawl_jobs[job_id]["pages_crawled"] = len(crawled_results)
+
+            # Index immediately
+            success = await indexer.index_page(result)
+            if success:
+                crawl_jobs[job_id]["pages_indexed"] += 1
+
+        # Run the crawl
+        results = await crawler.crawl(
+            seed_urls=request.seed_urls,
+            max_pages=request.max_pages,
+            callback=on_page_crawled
+        )
+
+        # Calculate PageRank and re-index with scores
+        if results:
+            logger.info("Calculating PageRank scores", pages=len(results))
+            calculator = PageRankCalculator()
+            page_ranks = calculator.calculate(results)
+
+            # Re-index with PageRank scores
+            indexed = await indexer.index_pages(results, page_ranks)
+            crawl_jobs[job_id]["pages_indexed"] = indexed
+
+        crawl_jobs[job_id]["status"] = "completed"
+        crawl_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+
+        logger.info("Crawl job completed",
+                   job_id=job_id,
+                   pages_crawled=len(results),
+                   pages_indexed=crawl_jobs[job_id]["pages_indexed"])
+
+    except Exception as e:
+        logger.error("Crawl job failed", job_id=job_id, error=str(e))
+        crawl_jobs[job_id]["status"] = "failed"
+        crawl_jobs[job_id]["error"] = str(e)
+        crawl_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+
+
+# Get crawl job status
+@app.get("/api/v2/engine/crawl/{job_id}")
+async def get_crawl_job(job_id: str):
+    """Get the status of a crawl job"""
+    if job_id not in crawl_jobs:
+        raise HTTPException(status_code=404, detail="Crawl job not found")
+
+    return crawl_jobs[job_id]
+
+
+# List all crawl jobs
+@app.get("/api/v2/engine/crawl")
+async def list_crawl_jobs():
+    """List all crawl jobs"""
+    return {
+        "jobs": list(crawl_jobs.values()),
+        "total": len(crawl_jobs)
+    }
+
+
+# Delete pages by domain
+@app.delete("/api/v2/engine/domain/{domain}")
+async def delete_domain(domain: str):
+    """Delete all indexed pages from a domain"""
+    try:
+        meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+        index_config = IndexConfig(
+            host=meili_host,
+            api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+        )
+        indexer = XenoIndexer(index_config)
+        await indexer.initialize()
+
+        task_uid = await indexer.delete_domain(domain)
+
+        return {
+            "success": True,
+            "domain": domain,
+            "task_uid": task_uid,
+            "message": f"Deletion task queued for domain: {domain}"
+        }
+    except Exception as e:
+        logger.error("Delete domain failed", domain=domain, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Clear entire index
+@app.delete("/api/v2/engine/index")
+async def clear_index():
+    """Clear all documents from the search index (DANGEROUS!)"""
+    try:
+        meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+        index_config = IndexConfig(
+            host=meili_host,
+            api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+        )
+        indexer = XenoIndexer(index_config)
+        await indexer.initialize()
+
+        task_uid = await indexer.clear_index()
+
+        return {
+            "success": True,
+            "task_uid": task_uid,
+            "message": "Index clear task queued"
+        }
+    except Exception as e:
+        logger.error("Clear index failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# END OF XENO SEARCH ENGINE API
+# ============================================================================

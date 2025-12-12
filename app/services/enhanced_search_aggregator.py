@@ -346,6 +346,138 @@ class BraveSearchEngine(SearchEngineBase):
             raise
 
 
+class GoogleCustomSearchEngine(SearchEngineBase):
+    """Google Custom Search API implementation"""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("google", config)
+        self.api_key = config.get('api_key')
+        self.cx = config.get('cx')  # Custom Search Engine ID
+        self.base_url = "https://www.googleapis.com/customsearch/v1"
+
+    def is_enabled(self) -> bool:
+        return self.enabled and bool(self.api_key) and bool(self.cx)
+
+    @track_operation("google_search")
+    async def search(self, query: str, num_results: int = 10) -> List[SearchEngineResult]:
+        """Search using Google Custom Search API"""
+        if not self.api_key or not self.cx:
+            logger.warning("Google Custom Search API key or CX not configured")
+            return []
+
+        results = []
+
+        params = {
+            'key': self.api_key,
+            'cx': self.cx,
+            'q': query,
+            'num': min(num_results, 10),  # Google API limit is 10 per request
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                logger.info("Querying Google Custom Search API", query=query)
+
+                response = await client.get(self.base_url, params=params)
+                response.raise_for_status()
+
+                data = response.json()
+
+                if 'items' not in data:
+                    logger.warning("No items in Google Search response")
+                    return results
+
+                for i, result in enumerate(data['items'][:num_results]):
+                    search_result = SearchEngineResult(
+                        title=result.get('title', '').strip(),
+                        url=result.get('link', '').strip(),
+                        snippet=result.get('snippet', '').strip(),
+                        engine=self.name,
+                        rank=i + 1,
+                        confidence_score=0.95,  # Google has high quality results
+                        metadata={
+                            'displayLink': result.get('displayLink'),
+                            'formattedUrl': result.get('formattedUrl'),
+                        }
+                    )
+                    results.append(search_result)
+
+                logger.info("Google Search successful", results_count=len(results))
+                return results
+
+        except Exception as e:
+            logger.error("Google Search failed", error=str(e))
+            raise
+
+
+class BingSearchEngine(SearchEngineBase):
+    """Bing Web Search API implementation"""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("bing", config)
+        self.api_key = config.get('api_key')
+        self.base_url = "https://api.bing.microsoft.com/v7.0/search"
+
+    def is_enabled(self) -> bool:
+        return self.enabled and bool(self.api_key)
+
+    @track_operation("bing_search")
+    async def search(self, query: str, num_results: int = 10) -> List[SearchEngineResult]:
+        """Search using Bing Web Search API"""
+        if not self.api_key:
+            logger.warning("Bing Search API key not configured")
+            return []
+
+        results = []
+
+        params = {
+            'q': query,
+            'count': min(num_results, 50),  # Bing API limit
+            'offset': 0,
+            'mkt': 'en-US',
+            'safeSearch': 'Moderate',
+        }
+
+        headers = {
+            'Ocp-Apim-Subscription-Key': self.api_key,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                logger.info("Querying Bing Search API", query=query)
+
+                response = await client.get(self.base_url, params=params, headers=headers)
+                response.raise_for_status()
+
+                data = response.json()
+
+                if 'webPages' not in data or 'value' not in data['webPages']:
+                    logger.warning("No webPages in Bing Search response")
+                    return results
+
+                for i, result in enumerate(data['webPages']['value'][:num_results]):
+                    search_result = SearchEngineResult(
+                        title=result.get('name', '').strip(),
+                        url=result.get('url', '').strip(),
+                        snippet=result.get('snippet', '').strip(),
+                        engine=self.name,
+                        rank=i + 1,
+                        confidence_score=0.9,
+                        metadata={
+                            'displayUrl': result.get('displayUrl'),
+                            'dateLastCrawled': result.get('dateLastCrawled'),
+                        }
+                    )
+                    results.append(search_result)
+
+                logger.info("Bing Search successful", results_count=len(results))
+                return results
+
+        except Exception as e:
+            logger.error("Bing Search failed", error=str(e))
+            raise
+
+
 class EnhancedSearchAggregator:
     """Enhanced search aggregator with multiple engines and intelligent ranking"""
     
@@ -393,7 +525,29 @@ class EnhancedSearchAggregator:
                 'enabled': True,
                 'weight': 1.2
             })
-        
+
+        # Google Custom Search
+        google_api_key = search_config.get('google_api_key')
+        google_cx = search_config.get('google_cx')
+        if google_api_key and google_cx:
+            self.engines["google"] = GoogleCustomSearchEngine({
+                'api_key': google_api_key,
+                'cx': google_cx,
+                'timeout': search_config['timeout'],
+                'enabled': True,
+                'weight': 1.5  # Google gets highest weight
+            })
+
+        # Bing Search
+        bing_api_key = search_config.get('bing_api_key')
+        if bing_api_key:
+            self.engines["bing"] = BingSearchEngine({
+                'api_key': bing_api_key,
+                'timeout': search_config['timeout'],
+                'enabled': True,
+                'weight': 1.3
+            })
+
         enabled_engines = [name for name, engine in self.engines.items() if engine.is_enabled()]
         logger.info("Search engines initialized", engines=enabled_engines)
     

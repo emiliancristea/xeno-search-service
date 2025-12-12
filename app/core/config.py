@@ -37,7 +37,10 @@ class XenoConfig(BaseSettings):
     )
     duckduckgo_enabled: bool = Field(default=True, env="DUCKDUCKGO_ENABLED")
     brave_search_api_key: Optional[str] = Field(default=None, env="BRAVE_SEARCH_API_KEY")
-    
+    google_api_key: Optional[str] = Field(default=None, env="GOOGLE_API_KEY")
+    google_cx: Optional[str] = Field(default=None, env="GOOGLE_CX")  # Custom Search Engine ID
+    bing_api_key: Optional[str] = Field(default=None, env="BING_API_KEY")
+
     # === Search Configuration ===
     default_num_results: int = Field(default=10, env="DEFAULT_NUM_RESULTS")
     max_results_per_request: int = Field(default=50, env="MAX_RESULTS_PER_REQUEST")
@@ -149,6 +152,11 @@ class XenoConfig(BaseSettings):
     # === Database Configuration (for persistent storage) ===
     database_enabled: bool = Field(default=False, env="DATABASE_ENABLED")
     database_url: Optional[str] = Field(default=None, env="DATABASE_URL")
+
+    # === Meilisearch Configuration (for Xeno Search Engine) ===
+    meili_host: str = Field(default="http://localhost:7700", env="MEILI_HOST")
+    meili_master_key: str = Field(default="xeno_search_master_key_change_me", env="MEILI_MASTER_KEY")
+    meili_index_name: str = Field(default="xeno_pages", env="MEILI_INDEX_NAME")
     
     @validator("search_engines", pre=True)
     def parse_search_engines(cls, v):
@@ -210,6 +218,9 @@ class XenoConfig(BaseSettings):
             "searxng_instances": self.searxng_instances,
             "duckduckgo_enabled": self.duckduckgo_enabled,
             "brave_api_key": self.brave_search_api_key,
+            "google_api_key": self.google_api_key,
+            "google_cx": self.google_cx,
+            "bing_api_key": self.bing_api_key,
             "timeout": self.search_timeout
         }
     
