@@ -7,12 +7,13 @@
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![Redis](https://img.shields.io/badge/Redis-7.0+-DC382D?style=for-the-badge&logo=redis&logoColor=white)](https://redis.io)
+[![Meilisearch](https://img.shields.io/badge/Meilisearch-1.0+-FF6188?style=for-the-badge&logo=meilisearch&logoColor=white)](https://meilisearch.com)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
 
-*A production-ready, scalable search aggregation service featuring multi-engine orchestration, transformer-based NLP, real-time WebSocket streaming, and comprehensive observability — rivaling commercial solutions like Perplexity AI.*
+*A production-ready, scalable search aggregation service featuring multi-engine orchestration, transformer-based NLP, real-time WebSocket streaming, **custom web crawler with PageRank indexing**, and comprehensive observability — rivaling commercial solutions like Perplexity AI.*
 
-[Features](#-key-features) • [Architecture](#-system-architecture) • [Quick Start](#-quick-start) • [API Reference](#-api-reference) • [Configuration](#%EF%B8%8F-configuration-reference) • [Deployment](#-production-deployment)
+[Features](#-key-features) • [Xeno Engine](#-xeno-search-engine) • [Architecture](#-system-architecture) • [Quick Start](#-quick-start) • [API Reference](#-api-reference) • [Configuration](#%EF%B8%8F-configuration-reference) • [Deployment](#-production-deployment)
 
 </div>
 
@@ -21,6 +22,7 @@
 ## 📋 Table of Contents
 
 - [Key Features](#-key-features)
+- [Xeno Search Engine](#-xeno-search-engine)
 - [Technology Stack](#-technology-stack)
 - [System Architecture](#-system-architecture)
 - [Quick Start](#-quick-start)
@@ -73,6 +75,152 @@
 
 ---
 
+## 🔍 Xeno Search Engine
+
+### Build Your Own Google - Custom Crawler & Index
+
+Xeno Search Service includes a **complete custom search engine** powered by Meilisearch, allowing you to crawl, index, and search your own web content without relying on external APIs.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         XENO SEARCH ENGINE ARCHITECTURE                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+    ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
+    │  Seed URLs    │────▶│   Crawler     │────▶│   Indexer     │
+    │  or Query     │     │  (aiohttp)    │     │ (Meilisearch) │
+    └───────────────┘     └───────────────┘     └───────────────┘
+                                │                      │
+                                │                      │
+                                ▼                      ▼
+                          ┌───────────┐         ┌───────────┐
+                          │  Redis    │         │ PageRank  │
+                          │  Queue    │         │ Algorithm │
+                          └───────────┘         └───────────┘
+                                                       │
+                                                       ▼
+    ┌───────────────┐     ┌───────────────┐     ┌───────────────┐
+    │   Search      │◀────│   Full-Text   │◀────│  Relevance    │
+    │   Results     │     │    Search     │     │   Scoring     │
+    └───────────────┘     └───────────────┘     └───────────────┘
+```
+
+### Key Capabilities
+
+| Feature | Description |
+|---------|-------------|
+| **Async Web Crawler** | High-performance aiohttp-based crawler with robots.txt compliance |
+| **Redis URL Queue** | Distributed crawl coordination with deduplication |
+| **PageRank Algorithm** | Google-style authority scoring for result ranking |
+| **Meilisearch Index** | Lightning-fast full-text search with typo tolerance |
+| **Topic Detection** | Automatic category matching from seed database |
+| **Smart Auto-Crawl** | Automatically crawl when index lacks relevant results |
+| **Real-time Streaming** | WebSocket progress updates during crawling |
+
+### Xeno Engine API Endpoints
+
+#### Search Custom Index
+```bash
+# Search your indexed content
+POST /api/v2/engine/search
+{
+    "query": "machine learning tutorials",
+    "page": 1,
+    "per_page": 10,
+    "domain": "docs.python.org"  # Optional filter
+}
+```
+
+#### Start Crawl Job
+```bash
+# Crawl websites and index content
+POST /api/v2/engine/crawl
+{
+    "seed_urls": ["https://docs.python.org", "https://pytorch.org"],
+    "max_pages": 100,
+    "max_depth": 5,
+    "follow_external": false
+}
+```
+
+#### Topic-Aware Smart Search
+```bash
+# Automatically detect topic and crawl if no results
+POST /api/v2/engine/topic-search
+{
+    "query": "what is kubernetes",
+    "auto_crawl_if_empty": true,
+    "min_results_threshold": 3,
+    "max_crawl_sites": 3
+}
+```
+
+#### Dynamic Category-Based Crawling
+```bash
+# Crawl sites based on detected topic category
+POST /api/v2/engine/crawl/dynamic
+{
+    "query": "python web frameworks",
+    "max_sites": 5,
+    "max_pages_per_site": 50,
+    "background": true
+}
+```
+
+### Complete Xeno Engine Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v2/engine/search` | POST | Search the custom index |
+| `/api/v2/engine/suggest` | GET | Get search suggestions |
+| `/api/v2/engine/domains` | GET | List indexed domains |
+| `/api/v2/engine/stats` | GET | Index statistics |
+| `/api/v2/engine/crawl` | POST | Start crawl job |
+| `/api/v2/engine/crawl` | GET | List all crawl jobs |
+| `/api/v2/engine/crawl/{job_id}` | GET | Get crawl job status |
+| `/api/v2/engine/domain/{domain}` | DELETE | Remove domain from index |
+| `/api/v2/engine/index` | DELETE | Clear entire index |
+| `/api/v2/engine/smart-search` | POST | Search with auto-crawl |
+| `/api/v2/engine/topic-search` | POST | Topic-aware search |
+| `/api/v2/engine/topic-search/streaming` | POST | Streaming topic search |
+| `/api/v2/engine/crawl/dynamic` | POST | Dynamic category crawl |
+| `/api/v2/engine/seed/stats` | GET | Seed database statistics |
+| `/api/v2/engine/seed/categories` | GET | List seed categories |
+| `/api/v2/engine/seed/category/{name}` | GET | Get category sites |
+| `/api/v2/engine/seed/match` | GET | Match query to categories |
+
+### Seed Database Categories
+
+The engine includes a curated seed database with 200+ authoritative sites across categories:
+
+- **Technology**: Python docs, MDN, Stack Overflow, GitHub
+- **Science**: arXiv, PubMed, Nature, Science
+- **News**: Reuters, AP, BBC, NPR
+- **Business**: Bloomberg, WSJ, Financial Times
+- **Health**: Mayo Clinic, WebMD, NIH
+- **Education**: MIT OpenCourseWare, Khan Academy, Coursera
+- **Legal**: Cornell Law, FindLaw, Legal Information Institute
+- **Government**: Data.gov, NASA, Census
+- And many more...
+
+### WebSocket Real-Time Updates
+
+```javascript
+// Connect to streaming topic search
+const ws = new WebSocket('ws://localhost:8000/ws/engine/topic-search/search-id');
+
+ws.onmessage = (event) => {
+    const update = JSON.parse(event.data);
+    console.log(`Phase: ${update.data.phase}`);
+    console.log(`Progress: ${update.data.progress}%`);
+    console.log(`Message: ${update.data.message}`);
+};
+```
+
+Progress phases: `initializing` → `checking` → `detecting` → `topic_found` → `crawling` → `indexed` → `finalizing` → `completed`
+
+---
+
 ## 🛠 Technology Stack
 
 ### Core Framework
@@ -108,12 +256,14 @@
 | **pandas** | Structured data manipulation |
 | **numpy** | Numerical computations for ML pipelines |
 
-### Caching & Storage
+### Caching, Storage & Search
 | Technology | Version | Purpose |
 |------------|---------|---------|
 | **Redis** | 5.0+ | Distributed caching with pub/sub |
 | **redis-py** | 5.0+ | Async Redis client (replaces deprecated aioredis) |
 | **cachetools** | 5.3+ | In-memory LRU/TTL cache implementations |
+| **Meilisearch** | 1.0+ | Lightning-fast full-text search engine |
+| **meilisearch-python** | 0.28+ | Async Meilisearch client |
 
 ### Monitoring & Observability
 | Technology | Purpose |
@@ -202,6 +352,14 @@
 │  │  • Relevance Scoring                  │  │  │                                 │
 │  │  • Content Aggregation                │  │  │                                 │
 │  └───────────────────────────────────────┘  │  │                                 │
+│  ┌───────────────────────────────────────┐  │  │                                 │
+│  │        Xeno Search Engine             │  │  │                                 │
+│  │  • Custom Web Crawler (aiohttp)       │  │  │                                 │
+│  │  • Meilisearch Indexer                │  │  │                                 │
+│  │  • PageRank Algorithm                 │  │  │                                 │
+│  │  • Topic Detection + Seed Database    │  │  │                                 │
+│  │  • Smart Auto-Crawl                   │  │  │                                 │
+│  └───────────────────────────────────────┘  │  │                                 │
 └─────────────────────────────────────────────┘  └─────────────────────────────────┘
           │                                                     │
           ▼                                                     ▼
@@ -211,6 +369,10 @@
 │  │   SearXNG    │  │  DuckDuckGo  │  │ Brave Search │  │    Redis     │         │
 │  │  Instances   │  │   HTML API   │  │     API      │  │   Cluster    │         │
 │  └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘         │
+│  ┌──────────────┐  ┌──────────────┐                                             │
+│  │ Meilisearch  │  │ Google/Bing  │                                             │
+│  │    Index     │  │    APIs      │                                             │
+│  └──────────────┘  └──────────────┘                                             │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 

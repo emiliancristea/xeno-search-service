@@ -814,6 +814,7 @@ async def root():
 
 from pydantic import BaseModel, Field
 from typing import Optional as OptionalType
+import aiohttp
 
 # Pydantic models for Xeno Search Engine
 class XenoEngineSearchRequest(BaseModel):
@@ -1117,6 +1118,772 @@ async def clear_index():
     except Exception as e:
         logger.error("Clear index failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# SMART AUTO-CRAWL SEARCH
+# ============================================================================
+
+class SmartSearchRequest(BaseModel):
+    """Request for smart search with auto-crawl"""
+    query: str = Field(..., min_length=1, max_length=500)
+    auto_crawl: bool = Field(default=True, description="Auto-crawl if no results found")
+    max_crawl_pages: int = Field(default=5, ge=1, le=20)
+    min_results_threshold: int = Field(default=2, description="Trigger crawl if fewer results")
+
+
+async def find_urls_to_crawl(query: str, num_urls: int = 5) -> List[str]:
+    """
+    Find relevant URLs to crawl based on a search query
+    Uses the internal search aggregator to discover URLs
+    """
+    urls = []
+    skip_domains = ['youtube.com', 'facebook.com', 'twitter.com', 'instagram.com',
+                    'tiktok.com', 'reddit.com', 'linkedin.com', 'pinterest.com',
+                    'google.com', 'bing.com', 'yahoo.com']
+
+    try:
+        # Use our internal search aggregator to find URLs
+        from app.services.enhanced_search_aggregator import perform_enhanced_search
+
+        sources = await perform_enhanced_search(query, num_results=num_urls * 2)
+
+        for source in sources:
+            url = source.url if hasattr(source, 'url') else str(source)
+            if url and url.startswith('http'):
+                if not any(domain in url for domain in skip_domains):
+                    if url not in urls:
+                        urls.append(url)
+                        if len(urls) >= num_urls:
+                            break
+
+        if urls:
+            logger.info("Found URLs from internal search", count=len(urls))
+
+    except Exception as e:
+        logger.warning("Internal search failed for URL discovery", error=str(e))
+
+    # If no URLs found, try direct web search as fallback
+    if len(urls) < 2:
+        try:
+            # Try DuckDuckGo API
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                results = list(ddgs.text(query, max_results=num_urls))
+                for result in results:
+                    url = result.get('href', '')
+                    if url and url.startswith('http'):
+                        if not any(domain in url for domain in skip_domains):
+                            if url not in urls:
+                                urls.append(url)
+                                if len(urls) >= num_urls:
+                                    break
+            if urls:
+                logger.info("Found URLs from DuckDuckGo API", count=len(urls))
+        except Exception as e:
+            logger.warning("DuckDuckGo API failed", error=str(e))
+
+    logger.info("Total URLs found to crawl", query=query, count=len(urls), urls=urls[:3])
+    return urls[:num_urls]
+
+
+@app.post("/api/v2/engine/smart-search")
+async def smart_search(request: SmartSearchRequest):
+    """
+    Smart search with automatic crawling
+
+    1. Search existing index
+    2. If not enough results and auto_crawl=True:
+       - Find relevant URLs via external search
+       - Crawl and index them
+       - Return combined results
+    """
+    start_time = time.time()
+
+    try:
+        engine = await get_xeno_search_engine()
+
+        # First, search existing index
+        initial_response = await engine.search(
+            query=request.query,
+            per_page=10
+        )
+
+        initial_results = len(initial_response.results)
+        crawled_new = False
+        crawl_info = None
+
+        # If not enough results and auto-crawl is enabled
+        if initial_results < request.min_results_threshold and request.auto_crawl:
+            logger.info("Not enough results, triggering auto-crawl",
+                       query=request.query,
+                       initial_results=initial_results,
+                       threshold=request.min_results_threshold)
+
+            # Find URLs to crawl
+            urls_to_crawl = await find_urls_to_crawl(request.query, num_urls=request.max_crawl_pages)
+
+            if urls_to_crawl:
+                # Configure crawler and indexer
+                meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+                redis_url = config.redis_url if hasattr(config, 'redis_url') else "redis://localhost:6379/2"
+
+                crawl_config = CrawlConfig(
+                    max_pages_per_domain=3,  # Limit per domain for speed
+                    max_depth=1,  # Don't go too deep
+                    follow_external_links=False,
+                    delay_between_requests=0.5,  # Faster for auto-crawl
+                    respect_robots_txt=True
+                )
+
+                crawler = XenoCrawler(redis_url=redis_url, config=crawl_config)
+
+                index_config = IndexConfig(
+                    host=meili_host,
+                    api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+                )
+                indexer = XenoIndexer(index_config)
+                await indexer.initialize()
+
+                # Crawl the URLs
+                try:
+                    results = await crawler.crawl(
+                        seed_urls=urls_to_crawl,
+                        max_pages=request.max_crawl_pages
+                    )
+
+                    if results:
+                        # Calculate PageRank and index
+                        calculator = PageRankCalculator()
+                        page_ranks = calculator.calculate(results)
+                        indexed = await indexer.index_pages(results, page_ranks)
+
+                        crawled_new = True
+                        crawl_info = {
+                            "urls_found": len(urls_to_crawl),
+                            "pages_crawled": len(results),
+                            "pages_indexed": indexed
+                        }
+
+                        logger.info("Auto-crawl completed",
+                                   query=request.query,
+                                   pages_indexed=indexed)
+
+                        # Wait a moment for Meilisearch to index
+                        await asyncio.sleep(0.5)
+
+                except Exception as e:
+                    logger.error("Auto-crawl failed", query=request.query, error=str(e))
+
+        # Search again (with new content if crawled)
+        final_response = await engine.search(
+            query=request.query,
+            per_page=10
+        )
+
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return {
+            "query": request.query,
+            "results": [r.to_dict() for r in final_response.results],
+            "total_hits": final_response.total_hits,
+            "processing_time_ms": processing_time,
+            "auto_crawled": crawled_new,
+            "crawl_info": crawl_info,
+            "message": f"Found {final_response.total_hits} results" +
+                      (f" (crawled {crawl_info['pages_indexed']} new pages)" if crawl_info else "")
+        }
+
+    except Exception as e:
+        logger.error("Smart search failed", query=request.query, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Smart search failed: {str(e)}")
+
+
+# ============================================================================
+# SEED DATABASE & CATEGORY-BASED DYNAMIC CRAWLING
+# ============================================================================
+
+from app.engine.seed_database import (
+    SEED_DATABASE,
+    find_matching_categories,
+    get_sites_for_query,
+    get_all_categories,
+    get_category_sites,
+    get_database_stats
+)
+
+
+@app.get("/api/v2/engine/seed/stats")
+async def get_seed_database_stats():
+    """Get statistics about the seed database"""
+    return get_database_stats()
+
+
+@app.get("/api/v2/engine/seed/categories")
+async def list_seed_categories():
+    """List all available seed categories"""
+    return {"categories": get_all_categories()}
+
+
+@app.get("/api/v2/engine/seed/category/{category_name}")
+async def get_seed_category(category_name: str):
+    """Get sites for a specific category"""
+    sites = get_category_sites(category_name)
+    if not sites:
+        raise HTTPException(status_code=404, detail=f"Category '{category_name}' not found")
+    return {"category": category_name, "sites": sites}
+
+
+@app.get("/api/v2/engine/seed/match")
+async def match_query_to_categories(query: str, max_categories: int = 3):
+    """Find matching categories for a query"""
+    categories = find_matching_categories(query, max_categories)
+    sites = get_sites_for_query(query, max_sites=10)
+
+    return {
+        "query": query,
+        "matching_categories": categories,
+        "suggested_sites": [
+            {"url": s.url, "name": s.name, "description": s.description}
+            for s in sites
+        ]
+    }
+
+
+class DynamicCrawlRequest(BaseModel):
+    """Request for dynamic category-based crawling"""
+    query: str = Field(..., min_length=1, max_length=500)
+    max_sites: int = Field(default=5, ge=1, le=20)
+    max_pages_per_site: int = Field(default=50, ge=10, le=500)
+    background: bool = Field(default=True, description="Run crawl in background")
+
+
+@app.post("/api/v2/engine/crawl/dynamic")
+async def dynamic_crawl_by_query(request: DynamicCrawlRequest):
+    """
+    Dynamic crawling based on query topic detection
+
+    1. Analyzes the query to detect topic/category
+    2. Selects appropriate seed sites from the database
+    3. Starts crawling those sites
+    4. Returns job info or results
+    """
+    # Find matching categories and sites
+    categories = find_matching_categories(request.query, max_categories=3)
+    sites = get_sites_for_query(request.query, max_sites=request.max_sites)
+
+    if not sites:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No relevant sites found for query: '{request.query}'. Try a more specific topic."
+        )
+
+    # Prepare seed URLs
+    seed_urls = [site.url for site in sites]
+
+    job_id = f"dynamic-{uuid.uuid4().hex[:12]}"
+
+    # Store job info
+    crawl_jobs[job_id] = {
+        "id": job_id,
+        "type": "dynamic",
+        "status": "queued",
+        "query": request.query,
+        "categories": categories,
+        "seed_urls": seed_urls,
+        "sites": [{"name": s.name, "url": s.url} for s in sites],
+        "max_pages_per_site": request.max_pages_per_site,
+        "pages_crawled": 0,
+        "pages_indexed": 0,
+        "errors": 0,
+        "started_at": None,
+        "completed_at": None,
+        "created_at": datetime.utcnow().isoformat()
+    }
+
+    if request.background:
+        # Start in background
+        asyncio.create_task(run_dynamic_crawl_job(job_id, sites, request.max_pages_per_site))
+
+        return {
+            "job_id": job_id,
+            "status": "started",
+            "query": request.query,
+            "categories": categories,
+            "sites_to_crawl": len(sites),
+            "message": f"Dynamic crawl started for {len(sites)} sites matching '{request.query}'"
+        }
+    else:
+        # Run synchronously (blocking)
+        await run_dynamic_crawl_job(job_id, sites, request.max_pages_per_site)
+        return crawl_jobs[job_id]
+
+
+async def run_dynamic_crawl_job(job_id: str, sites, max_pages_per_site: int):
+    """Background task for dynamic crawl job"""
+    try:
+        crawl_jobs[job_id]["status"] = "running"
+        crawl_jobs[job_id]["started_at"] = datetime.utcnow().isoformat()
+
+        meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+        redis_url = config.redis_url if hasattr(config, 'redis_url') else "redis://localhost:6379/2"
+
+        index_config = IndexConfig(
+            host=meili_host,
+            api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+        )
+        indexer = XenoIndexer(index_config)
+        await indexer.initialize()
+
+        all_results = []
+
+        # Crawl each site
+        for site in sites:
+            try:
+                logger.info("Dynamic crawl: starting site", site=site.name, url=site.url)
+
+                crawl_config = CrawlConfig(
+                    max_pages_per_domain=min(site.max_pages, max_pages_per_site),
+                    max_depth=5,
+                    follow_external_links=False,
+                    delay_between_requests=1.0,
+                    respect_robots_txt=True
+                )
+
+                crawler = XenoCrawler(redis_url=redis_url, config=crawl_config)
+
+                results = await crawler.crawl(
+                    seed_urls=[site.url],
+                    max_pages=min(site.max_pages, max_pages_per_site)
+                )
+
+                if results:
+                    all_results.extend(results)
+                    crawl_jobs[job_id]["pages_crawled"] += len(results)
+
+                    # Index immediately
+                    calculator = PageRankCalculator()
+                    page_ranks = calculator.calculate(results)
+                    indexed = await indexer.index_pages(results, page_ranks)
+                    crawl_jobs[job_id]["pages_indexed"] += indexed
+
+                logger.info("Dynamic crawl: site completed",
+                           site=site.name,
+                           pages=len(results) if results else 0)
+
+            except Exception as e:
+                logger.error("Dynamic crawl: site failed", site=site.name, error=str(e))
+                crawl_jobs[job_id]["errors"] += 1
+
+        crawl_jobs[job_id]["status"] = "completed"
+        crawl_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+
+        logger.info("Dynamic crawl job completed",
+                   job_id=job_id,
+                   total_pages=crawl_jobs[job_id]["pages_crawled"],
+                   total_indexed=crawl_jobs[job_id]["pages_indexed"])
+
+    except Exception as e:
+        logger.error("Dynamic crawl job failed", job_id=job_id, error=str(e))
+        crawl_jobs[job_id]["status"] = "failed"
+        crawl_jobs[job_id]["error"] = str(e)
+        crawl_jobs[job_id]["completed_at"] = datetime.utcnow().isoformat()
+
+
+class TopicSearchRequest(BaseModel):
+    """Request for topic-aware search with auto-crawl"""
+    query: str = Field(..., min_length=1, max_length=500)
+    auto_crawl_if_empty: bool = Field(default=True)
+    min_results_threshold: int = Field(default=3)
+    max_crawl_sites: int = Field(default=3)
+    max_pages_per_site: int = Field(default=30)
+
+
+def check_result_relevance(query: str, results: list, min_score: float = 0.3) -> tuple[bool, float]:
+    """
+    Check if search results are actually relevant to the query.
+    Returns (is_relevant, avg_score).
+
+    A result is considered relevant if:
+    1. Average score is above threshold
+    2. Query terms appear meaningfully in results (not just incidental mentions)
+    """
+    if not results:
+        return False, 0.0
+
+    query_words = set(query.lower().split())
+    # Remove common words that might match incidentally
+    stop_words = {'what', 'is', 'the', 'a', 'an', 'in', 'are', 'we', 'how', 'why', 'when', 'where', 'do', 'does', 'can', 'will', 'be', 'to', 'of', 'for', 'on', 'with', 'at', 'by', 'from'}
+    meaningful_words = query_words - stop_words
+
+    total_score = 0.0
+    meaningful_matches = 0
+
+    for result in results:
+        # Get the score from the result
+        score = getattr(result, 'score', 0) or 0
+        total_score += score
+
+        # Check if meaningful query words appear in title or content
+        title = (getattr(result, 'title', '') or '').lower()
+        content = (getattr(result, 'content', '') or getattr(result, 'snippet', '') or '').lower()
+        combined = title + ' ' + content
+
+        # Check for meaningful word presence
+        for word in meaningful_words:
+            if len(word) > 2 and word in combined:
+                meaningful_matches += 1
+                break
+
+    avg_score = total_score / len(results) if results else 0.0
+    relevance_ratio = meaningful_matches / len(results) if results else 0.0
+
+    # Results are relevant if average score is good AND meaningful words are found
+    is_relevant = avg_score >= min_score and relevance_ratio >= 0.3
+
+    return is_relevant, avg_score
+
+
+@app.post("/api/v2/engine/topic-search")
+async def topic_aware_search(request: TopicSearchRequest):
+    """
+    Topic-aware search using ONLY the Xeno Search Engine
+
+    1. Search existing index
+    2. Check result RELEVANCE (not just count)
+    3. If results are irrelevant, detect topic from query
+    4. Find relevant seed sites from our database
+    5. Crawl and index them
+    6. Return results from newly indexed content
+
+    NO external search APIs - only our own crawler and seed database!
+    """
+    start_time = time.time()
+
+    try:
+        engine = await get_xeno_search_engine()
+
+        # First, search existing index
+        initial_response = await engine.search(
+            query=request.query,
+            per_page=10
+        )
+
+        initial_results = len(initial_response.results)
+        crawl_info = None
+        categories_matched = []
+
+        # Check result relevance, not just count
+        is_relevant, avg_score = check_result_relevance(
+            request.query,
+            initial_response.results,
+            min_score=0.3
+        )
+
+        # Trigger crawl if: not enough results OR results are not relevant
+        needs_crawl = (
+            initial_results < request.min_results_threshold or
+            (initial_results > 0 and not is_relevant)
+        )
+
+        if needs_crawl and request.auto_crawl_if_empty:
+            logger.info("Topic search: triggering auto-crawl",
+                       query=request.query,
+                       initial_results=initial_results,
+                       is_relevant=is_relevant,
+                       avg_score=avg_score,
+                       reason="low_count" if initial_results < request.min_results_threshold else "low_relevance")
+
+            # Find matching categories and sites
+            categories_matched = find_matching_categories(request.query, max_categories=2)
+            sites = get_sites_for_query(request.query, max_sites=request.max_crawl_sites)
+
+            if sites:
+                meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+                redis_url = config.redis_url if hasattr(config, 'redis_url') else "redis://localhost:6379/2"
+
+                index_config = IndexConfig(
+                    host=meili_host,
+                    api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+                )
+                indexer = XenoIndexer(index_config)
+                await indexer.initialize()
+
+                total_crawled = 0
+                total_indexed = 0
+                sites_crawled = []
+
+                for site in sites:
+                    try:
+                        crawl_config = CrawlConfig(
+                            max_pages_per_domain=request.max_pages_per_site,
+                            max_depth=3,
+                            follow_external_links=False,
+                            delay_between_requests=0.5,  # Faster for topic search
+                            respect_robots_txt=True
+                        )
+
+                        crawler = XenoCrawler(redis_url=redis_url, config=crawl_config)
+
+                        results = await crawler.crawl(
+                            seed_urls=[site.url],
+                            max_pages=request.max_pages_per_site
+                        )
+
+                        if results:
+                            calculator = PageRankCalculator()
+                            page_ranks = calculator.calculate(results)
+                            indexed = await indexer.index_pages(results, page_ranks)
+
+                            total_crawled += len(results)
+                            total_indexed += indexed
+                            sites_crawled.append({
+                                "name": site.name,
+                                "url": site.url,
+                                "pages": len(results)
+                            })
+
+                    except Exception as e:
+                        logger.warning("Topic search: site crawl failed",
+                                      site=site.name, error=str(e))
+
+                if total_indexed > 0:
+                    crawl_info = {
+                        "categories": categories_matched,
+                        "sites_crawled": sites_crawled,
+                        "total_pages_crawled": total_crawled,
+                        "total_pages_indexed": total_indexed
+                    }
+
+                    # Wait for indexing
+                    await asyncio.sleep(0.5)
+
+                    logger.info("Topic search: crawl completed",
+                               query=request.query,
+                               pages_indexed=total_indexed)
+
+        # Search again with new content
+        final_response = await engine.search(
+            query=request.query,
+            per_page=10
+        )
+
+        processing_time = int((time.time() - start_time) * 1000)
+
+        return {
+            "query": request.query,
+            "results": [r.to_dict() for r in final_response.results],
+            "total_hits": final_response.total_hits,
+            "processing_time_ms": processing_time,
+            "categories_detected": categories_matched,
+            "crawl_info": crawl_info,
+            "message": f"Found {final_response.total_hits} results" +
+                      (f" (auto-crawled {crawl_info['total_pages_indexed']} pages from {len(crawl_info['sites_crawled'])} sites)"
+                       if crawl_info else " from existing index")
+        }
+
+    except Exception as e:
+        logger.error("Topic search failed", query=request.query, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Topic search failed: {str(e)}")
+
+
+# ============================================================================
+# STREAMING TOPIC SEARCH WITH WEBSOCKET PROGRESS
+# ============================================================================
+
+@app.websocket("/ws/engine/topic-search/{search_id}")
+async def topic_search_websocket(websocket: WebSocket, search_id: str):
+    """WebSocket endpoint for real-time topic search progress"""
+    connection_id = f"ws-topic-{uuid.uuid4().hex[:8]}"
+
+    await websocket_manager.connect(websocket, connection_id, search_id)
+
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await websocket.send_json({"type": "ping", "data": "pong"})
+    except WebSocketDisconnect:
+        websocket_manager.disconnect(connection_id, search_id)
+
+
+@app.post("/api/v2/engine/topic-search/streaming")
+async def streaming_topic_search(request: TopicSearchRequest):
+    """Start a streaming topic search with WebSocket progress updates"""
+    search_id = f"topic-{uuid.uuid4().hex[:12]}"
+
+    # Start search in background
+    asyncio.create_task(perform_streaming_topic_search(search_id, request))
+
+    return {
+        "search_id": search_id,
+        "websocket_url": f"/ws/engine/topic-search/{search_id}",
+        "status": "started"
+    }
+
+
+async def perform_streaming_topic_search(search_id: str, request: TopicSearchRequest):
+    """Perform topic search with real-time WebSocket updates"""
+    start_time = time.time()
+
+    try:
+        await websocket_manager.send_progress_update(
+            search_id, "initializing", 5, "🔍 Searching existing index..."
+        )
+
+        engine = await get_xeno_search_engine()
+
+        # First search existing index
+        initial_response = await engine.search(
+            query=request.query,
+            per_page=10
+        )
+
+        initial_results = len(initial_response.results)
+        crawl_info = None
+        categories_matched = []
+
+        await websocket_manager.send_progress_update(
+            search_id, "checking", 15,
+            f"📊 Found {initial_results} existing results, checking relevance..."
+        )
+
+        # Check result relevance
+        is_relevant, avg_score = check_result_relevance(
+            request.query,
+            initial_response.results,
+            min_score=0.3
+        )
+
+        needs_crawl = (
+            initial_results < request.min_results_threshold or
+            (initial_results > 0 and not is_relevant)
+        )
+
+        if needs_crawl and request.auto_crawl_if_empty:
+            await websocket_manager.send_progress_update(
+                search_id, "detecting", 20,
+                "🎯 Results not relevant enough, detecting topic..."
+            )
+
+            categories_matched = find_matching_categories(request.query, max_categories=2)
+            sites = get_sites_for_query(request.query, max_sites=request.max_crawl_sites)
+
+            if categories_matched:
+                await websocket_manager.send_progress_update(
+                    search_id, "topic_found", 25,
+                    f"📂 Detected topic: {', '.join(categories_matched)}"
+                )
+
+            if sites:
+                meili_host = "http://meilisearch:7700" if config.environment == "production" else "http://localhost:7700"
+                redis_url = config.redis_url if hasattr(config, 'redis_url') else "redis://localhost:6379/2"
+
+                index_config = IndexConfig(
+                    host=meili_host,
+                    api_key=config.meili_master_key if hasattr(config, 'meili_master_key') else "xeno_search_master_key_change_me"
+                )
+                indexer = XenoIndexer(index_config)
+                await indexer.initialize()
+
+                total_crawled = 0
+                total_indexed = 0
+                sites_crawled = []
+
+                for i, site in enumerate(sites):
+                    progress = 30 + int((i / len(sites)) * 50)  # 30-80%
+
+                    await websocket_manager.send_progress_update(
+                        search_id, "crawling", progress,
+                        f"🌐 Crawling {site.name} ({i+1}/{len(sites)})..."
+                    )
+
+                    try:
+                        crawl_config = CrawlConfig(
+                            max_pages_per_domain=request.max_pages_per_site,
+                            max_depth=2,  # Reduced depth for speed
+                            follow_external_links=False,
+                            delay_between_requests=0.3,  # Faster
+                            respect_robots_txt=True
+                        )
+
+                        crawler = XenoCrawler(redis_url=redis_url, config=crawl_config)
+
+                        results = await crawler.crawl(
+                            seed_urls=[site.url],
+                            max_pages=request.max_pages_per_site
+                        )
+
+                        if results:
+                            calculator = PageRankCalculator()
+                            page_ranks = calculator.calculate(results)
+                            indexed = await indexer.index_pages(results, page_ranks)
+
+                            total_crawled += len(results)
+                            total_indexed += indexed
+                            sites_crawled.append({
+                                "name": site.name,
+                                "url": site.url,
+                                "pages": len(results)
+                            })
+
+                            await websocket_manager.send_progress_update(
+                                search_id, "indexed", progress + 5,
+                                f"✅ Indexed {indexed} pages from {site.name}"
+                            )
+
+                    except Exception as e:
+                        logger.warning("Streaming topic search: site crawl failed",
+                                      site=site.name, error=str(e))
+                        await websocket_manager.send_progress_update(
+                            search_id, "crawl_error", progress,
+                            f"⚠️ Could not crawl {site.name}, continuing..."
+                        )
+
+                if total_indexed > 0:
+                    crawl_info = {
+                        "categories": categories_matched,
+                        "sites_crawled": sites_crawled,
+                        "total_pages_crawled": total_crawled,
+                        "total_pages_indexed": total_indexed
+                    }
+                    await asyncio.sleep(0.5)  # Wait for indexing
+
+        await websocket_manager.send_progress_update(
+            search_id, "finalizing", 90, "🔎 Fetching final results..."
+        )
+
+        # Final search with new content
+        final_response = await engine.search(
+            query=request.query,
+            per_page=10
+        )
+
+        processing_time = int((time.time() - start_time) * 1000)
+
+        result = {
+            "query": request.query,
+            "results": [r.to_dict() for r in final_response.results],
+            "total_hits": final_response.total_hits,
+            "processing_time_ms": processing_time,
+            "categories_detected": categories_matched,
+            "crawl_info": crawl_info,
+            "message": f"Found {final_response.total_hits} results" +
+                      (f" (auto-crawled {crawl_info['total_pages_indexed']} pages from {len(crawl_info['sites_crawled'])} sites)"
+                       if crawl_info else " from existing index")
+        }
+
+        await websocket_manager.send_progress_update(
+            search_id, "completed", 100,
+            f"✅ Search completed in {processing_time}ms!",
+            {"results": result}
+        )
+
+    except Exception as e:
+        logger.error("Streaming topic search failed", query=request.query, error=str(e))
+        await websocket_manager.send_progress_update(
+            search_id, "error", 0,
+            f"❌ Search failed: {str(e)}"
+        )
 
 
 # ============================================================================
