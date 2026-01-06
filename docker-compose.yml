@@ -1,0 +1,178 @@
+version: '3.8'
+
+services:
+  # Main application service
+  xeno-search:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    container_name: xeno-search-service
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # Service configuration
+      - SERVICE_NAME=xeno-search-service
+      - SERVICE_VERSION=2.0.0
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+
+      # Redis configuration
+      - REDIS_URL=redis://redis:6379/0
+      - CACHE_ENABLED=true
+      - CACHE_TYPE=redis
+
+      # Rate limiting
+      - RATE_LIMITING_ENABLED=true
+      - RATE_LIMIT_REQUESTS_PER_MINUTE=60
+      - RATE_LIMIT_REQUESTS_PER_HOUR=1000
+
+      # Auth (optional - set in .env file)
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      # API_KEYS defaults to empty list in config
+
+      # Logging
+      - LOGGING_LEVEL=${LOGGING_LEVEL:-INFO}
+      - LOGGING_FORMAT=json
+
+      # Search configuration
+      - SEARXNG_INSTANCE_URL=${SEARXNG_INSTANCE_URL:-https://searx.tiekoetter.com}
+      - BRAVE_SEARCH_API_KEY=${BRAVE_SEARCH_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_CX=${GOOGLE_CX:-}
+
+      # NLP/ML configuration
+      - SUMMARIZATION_MODEL=${SUMMARIZATION_MODEL:-sshleifer/distilbart-cnn-12-6}
+      - ENABLE_SEMANTIC_SEARCH=${ENABLE_SEMANTIC_SEARCH:-true}
+
+      # Meilisearch configuration (connects to existing xenolabs instance)
+      - MEILI_HOST=http://xenolabs-meilisearch:7700
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-xeno_search_master_key_change_me}
+
+      # CORS
+      # CORS_ORIGINS is handled by config default, don't set env var to avoid parsing issues
+    volumes:
+      - xeno-cache:/app/.cache
+      - xeno-logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - xeno-network
+      - xenolabs-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+
+  # Redis cache
+  redis:
+    image: redis:7-alpine
+    container_name: xeno-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - xeno-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+  # Optional: SearXNG instance (self-hosted search)
+  searxng:
+    image: searxng/searxng:latest
+    container_name: xeno-searxng
+    restart: unless-stopped
+    profiles:
+      - searxng  # Only starts when explicitly requested
+    ports:
+      - "${SEARXNG_PORT:-8888}:8080"
+    volumes:
+      - searxng-data:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:${SEARXNG_PORT:-8888}
+    networks:
+      - xeno-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+  # Optional: Prometheus metrics collector
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: xeno-prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - xeno-network
+
+  # Optional: Grafana dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: xeno-grafana
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - xeno-network
+
+volumes:
+  xeno-cache:
+    driver: local
+  xeno-logs:
+    driver: local
+  redis-data:
+    driver: local
+  searxng-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  xeno-network:
+    driver: bridge
+    name: xeno-network
+  xenolabs-network:
+    external: true
+    name: xeno-platform_xenolabs-network
